@@ -1,7 +1,7 @@
 # mock_pose_api.py
 # pip install fastapi uvicorn numpy
 
-import math, random
+import math, time
 import numpy as np
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -21,41 +21,53 @@ class PoseRequest(BaseModel):
     depthscale: float
 
 # ---------- App ----------
-app = FastAPI(title="Mock Pose API", version="3.0")
+app = FastAPI(title="Mock Pose API", version="4.0")
 
-def random_pose():
-    """Generate a random SE(3) pose matrix (4x4)."""
-    # Random Euler angles
-    ang_x = random.uniform(-math.pi/6, math.pi/6)  # ±30°
-    ang_y = random.uniform(-math.pi/6, math.pi/6)
-    ang_z = random.uniform(-math.pi/6, math.pi/6)
+# Pose generator settings
+Z_DIST = 10.0          # "far from the camera" along +Z
+YAW_DPS = 25.0         # deg/sec around Z
+PITCH_DPS = 60.0       # deg/sec around Y
+t0 = time.perf_counter()
 
-    Rx = np.array([[1,0,0],
-                   [0,math.cos(ang_x),-math.sin(ang_x)],
-                   [0,math.sin(ang_x), math.cos(ang_x)]])
-    Ry = np.array([[math.cos(ang_y),0,math.sin(ang_y)],
-                   [0,1,0],
-                   [-math.sin(ang_y),0,math.cos(ang_y)]])
-    Rz = np.array([[math.cos(ang_z),-math.sin(ang_z),0],
-                   [math.sin(ang_z), math.cos(ang_z),0],
-                   [0,0,1]])
+def Rz(rad: float) -> np.ndarray:
+    c, s = math.cos(rad), math.sin(rad)
+    return np.array([[ c,-s, 0.0],
+                     [ s, c, 0.0],
+                     [0.0,0.0, 1.0]], dtype=float)
 
-    R = Rz @ Ry @ Rx
-    # Random translation in a small cube
-    t = np.array([random.uniform(-0.1,0.1),
-                  random.uniform(-0.05,0.05),
-                  random.uniform(0.5,0.7)])  # Z positive
+def Ry(rad: float) -> np.ndarray:
+    c, s = math.cos(rad), math.sin(rad)
+    return np.array([[ c, 0.0, s],
+                     [0.0, 1.0,0.0],
+                     [-s, 0.0, c]], dtype=float)
 
-    T = np.eye(4)
-    T[:3,:3] = R
-    T[:3,3] = t
+def pose_at_time(t: float) -> np.ndarray:
+    """
+    Deterministic pose:
+      - centered in view: x=y=0
+      - far from camera: z=Z_DIST
+      - rotation: yaw (Z) and pitch (Y) at different angular rates
+    """
+    yaw   = math.radians(YAW_DPS   * t)
+    pitch = math.radians(PITCH_DPS * t)
+    R = Rz(yaw) @ Ry(pitch)            # intrinsic order: pitch then yaw
+    T = np.eye(4, dtype=float)
+    T[:3, :3] = R
+    T[:3,  3] = np.array([0.0, 0.0, Z_DIST], dtype=float)
     return T
 
 @app.post("/pose")
 def pose(req: PoseRequest):
-    # Return a fresh random pose each call
-    T = random_pose()
+    # Time-based "generator" pose (smooth, no randomness)
+    t = time.perf_counter() - t0
+    T = pose_at_time(t)
     return {
-        "status": "Pose estimation complete",
+        "status": "Pose generator (centered, far, 2-axis rotation)",
         "transformation_matrix": [T.tolist()],
+        "debug": {
+            "t_seconds": t,
+            "yaw_deg":  YAW_DPS * t,
+            "pitch_deg": PITCH_DPS * t,
+            "z_dist": Z_DIST
+        }
     }

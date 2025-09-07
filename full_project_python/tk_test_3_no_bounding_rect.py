@@ -5,7 +5,8 @@ import numpy as np
 from PIL import Image, ImageTk
 import trimesh
 
-API = "http://localhost:8000"
+# API = "http://localhost:8000"
+API = "http://192.168.178.134:8000"
 MODELS_DIR = "models"
 
 # ---------- Helpers ----------
@@ -287,14 +288,17 @@ class PoseApp:
                 snap_masked_pil=Image.fromarray(snap_masked)
 
                 # Depth
-                r=requests.post(f"{API}/depth",json={"rgb":pil_to_b64(snap)},timeout=20).json()
+                # r=requests.post(f"{API}/depth",json={"rgb":pil_to_b64(snap)},timeout=20).json()
+                r=requests.post(f"{API}/depth",json={"rgb":pil_to_b64(snap)},timeout=120).json()
                 depth=b64_to_pil(r["depth"])
 
                 # Pose
                 pose_req={"camera_matrix":self.K,
                           "images":[{"filename":"snap","rgb":pil_to_b64(snap),"depth":pil_to_b64(depth,fmt="PNG")}],
                           "mesh":"","mask":pil_to_b64(snap_masked_pil,fmt="PNG"),"depthscale":0.001}
-                resp=requests.post(f"{API}/pose",json=pose_req,timeout=20).json()
+                # resp=requests.post(f"{API}/pose",json=pose_req,timeout=20).json()
+                resp=requests.post(f"{API}/pose",json=pose_req,timeout=120).json()
+
                 self.pose_queue.put((snap, depth, snap_masked_pil, resp))
             except queue.Empty:
                 continue
