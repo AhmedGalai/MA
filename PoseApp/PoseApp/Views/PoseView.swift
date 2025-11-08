@@ -4,7 +4,7 @@ struct PoseView: View {
     @State private var logs: [String] = []
     @State private var isRunning = false
     @State private var selectedModel: String?
-views
+    // views
     var body: some View {
         VStack {
             HStack {

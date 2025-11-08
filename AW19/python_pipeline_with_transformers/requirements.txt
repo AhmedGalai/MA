@@ -1,0 +1,24 @@
+# Core dependencies
+flask>=2.3.0
+flask-cors>=4.0.0
+numpy>=1.24.0
+opencv-python>=4.8.0
+pillow>=10.0.0
+requests>=2.31.0
+
+# Deep learning
+torch>=2.0.0
+torchvision>=0.15.0
+transformers>=4.30.0
+
+# Screen capture
+mss>=9.0.0
+
+# Pose estimation API
+fastapi>=0.100.0
+uvicorn>=0.23.0
+pydantic>=2.0.0
+
+# Optional: GPU acceleration
+# For CUDA support, install PyTorch with CUDA from:
+# pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
