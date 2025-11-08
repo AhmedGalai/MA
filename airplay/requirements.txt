@@ -1,0 +1,22 @@
+# AirPlay Screen Mirroring Client Dependencies
+
+# Network discovery
+zeroconf>=0.132.2
+
+# Screen capture
+mss>=9.0.1  # Cross-platform screenshot
+pillow>=10.0.0
+
+# Video encoding
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# Network protocols
+requests>=2.31.0
+pycryptodome>=3.19.0  # For encryption/decryption
+
+# Audio (optional, for future enhancement)
+pyaudio>=0.2.13
+
+# Utility
+python-dotenv>=1.0.0
