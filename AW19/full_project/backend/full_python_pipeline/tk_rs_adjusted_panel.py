@@ -10,7 +10,7 @@ from typing import Optional
 import numpy as np
 from PIL import Image, ImageTk
 
-from .realsense_adapter_adjusted import RealSenseToAVPAligner
+from realsense_adapter_adjusted import RealSenseToAVPAligner
 
 
 class RSAdjustedPanel:

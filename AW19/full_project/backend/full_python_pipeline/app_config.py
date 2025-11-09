@@ -6,24 +6,26 @@ Edit this file to change runtime addresses and default parameters.
 
 APP_CONFIG = {
     "main_api": {
-        "host": "localhost",
-        "port": 5000,
-        "base_url": "http://localhost:5000",
+        "host": "10.145.8.86",
+        "port": 8000,
+        "base_url": "http://10.145.8.86:8000",
     },
     "pose_api": {
-        "host": "localhost",
-        "port": 9000,
-        "base_url": "http://localhost:9000",
-        "route": "/pose",
+        #"host": "10.145.8.86",
+        "host":"localhost",
+        "port": 5000,
+        #"base_url": "http://10.145.8.86:5000",
+        "base_url":"http://localhost:5000",
+        "route": "/foundationpose",
     },
     "defaults": {
         "model_name": "cube.ply",
         "estimate_depth": True,
-        "use_random_pose": True,
+        "use_random_pose": False,
         "use_realsense": False,  # True = RealSense hardware, False = Transformers-based depth
-        "ui_refresh_hz": 30,
+        "ui_refresh_hz": 60,
         "roi_hsv_center": [90, 128, 128],
-        "tolerances": {"h": 12, "s": 50, "v": 50},
+        "tolerances": {"h": 10, "s": 50, "v": 50},
     },
     "capture": {
         "left": 934,
