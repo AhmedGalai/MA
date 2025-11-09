@@ -1,0 +1,650 @@
+\section{Full System Implementation}
+
+This chapter describes the complete implementation of the pose estimation system, spanning the Python-based backend pipeline and the native \texttt{visionOS} application for Apple Vision Pro. The system establishes a client-server architecture where the Vision Pro captures RGBD frames and transmits them to a Python backend that performs ArUco marker detection, monocular depth estimation or RealSense depth acquisition, ROI masking, and 6D pose estimation with head tracking correction.
+
+\subsection{System Architecture Overview}
+
+The complete system consists of three primary subsystems:
+
+\begin{enumerate}
+    \item \textbf{VisionOS Client} -- Runs on Apple Vision Pro, captures frames, manages user interaction via gaze and pinch gestures, and renders 3D pose overlays in AR
+    \item \textbf{Python Backend Pipeline} -- Processes incoming frames through a unified computer vision pipeline supporting both hardware (RealSense) and AI-based (Transformers) depth estimation
+    \item \textbf{Pose Estimation API} -- External service providing 6D object pose from RGBD inputs and CAD models
+\end{enumerate}
+
+\begin{figure}[H]
+    \centering
+    \fbox{\parbox{0.9\linewidth}{System Architecture Diagram Placeholder}}
+    \caption{Overview of the complete system architecture showing dataflow between Vision Pro, Python backend, and pose estimation service.}
+    \label{fig:system_arch}
+\end{figure}
+
+The dataflow operates as follows:
+
+\begin{enumerate}
+    \item Vision Pro captures RGB frames via main camera
+    \item User selects region-of-interest (ROI) using gaze + pinch gesture
+    \item Client retrieves camera intrinsics from backend or uses device intrinsics
+    \item Client sends cropped RGB frame and intrinsics to backend via HTTP
+    \item Backend processes frame through CV pipeline (ArUco detection, depth estimation, masking)
+    \item Backend forwards RGBD + intrinsics + CAD model to pose estimation API
+    \item Pose API returns 4×4 transformation matrix $\mathbf{T}_{\text{object}}^{\text{camera}}$
+    \item Backend applies head pose correction: $\mathbf{T}_{\text{corrected}} = \mathbf{T}_{\text{head}} \cdot \mathbf{T}_{\text{object}}$
+    \item Client receives pose, converts to RealityKit coordinates, and renders CAD overlay
+\end{enumerate}
+
+\subsection{Python Backend Pipeline}
+
+\subsubsection{Unified Computer Vision Module}
+
+The core processing pipeline is implemented in \texttt{computer\_vision\_pipeline.py}, a GPU-accelerated module supporting dual-mode depth acquisition. This design allows seamless switching between hardware depth sensors (Intel RealSense D435/D455) and AI-based monocular depth estimation (Depth-Anything-V2 transformer model).
+
+\textbf{Key Features:}
+\begin{itemize}
+    \item \textbf{ArUco Marker Detection} -- Detects 4×4 fiducial marker grid (DICT\_4X4\_50)
+    \item \textbf{Pose Estimation} -- Solves PnP using all detected markers with IPPE refinement
+    \item \textbf{Dual Depth Support} -- RealSense hardware or Transformers inference
+    \item \textbf{ROI Mask Extraction} -- HSV color-based segmentation with configurable tolerances
+    \item \textbf{GPU Acceleration} -- CUDA support for depth inference (50-100ms on GPU vs 2-5s on CPU)
+    \item \textbf{Time Synchronization} -- All outputs timestamped for latency analysis
+    \item \textbf{PNG Encoding} -- Lossless depth encoding for API compatibility
+\end{itemize}
+
+\subsubsection{Depth Acquisition Modes}
+
+\paragraph{Mode 1: Transformers-based Monocular Depth Estimation}
+
+When \texttt{use\_realsense=False}, the pipeline employs the Depth-Anything-V2 model\cite{depth_anything_v2}, a state-of-the-art transformer architecture for relative depth prediction from single RGB images.
+
+\textbf{Processing Pipeline:}
+\begin{enumerate}
+    \item Convert BGR frame to RGB PIL image
+    \item Run inference through HuggingFace pipeline (GPU accelerated)
+    \item Normalize output depth map to 0-255 range: $D_{\text{norm}} = 255 \cdot \frac{D - D_{\min}}{D_{\max} - D_{\min}}$
+    \item Generate disparity via inversion: $\text{Disp} = 255 - D_{\text{norm}}$
+    \item Encode as PNG base64 for transmission
+\end{enumerate}
+
+\textbf{Performance:} 50-100ms per frame on CUDA-enabled GPU (RTX 3060/4060), 2-5s on CPU
+
+\paragraph{Mode 2: RealSense Hardware Depth}
+
+When \texttt{use\_realsense=True} and RealSense camera is available, the pipeline uses metric hardware depth via the \texttt{RealSenseToAVPAligner} adapter.
+
+\textbf{Processing Pipeline:}
+\begin{enumerate}
+    \item Capture aligned depth + color frames from RealSense at 30 FPS
+    \item Retrieve RealSense color camera intrinsics $\mathbf{K}_{\text{RS}}$
+    \item Fetch AVP camera intrinsics $\mathbf{K}_{\text{AVP}}$ from main API
+    \item Load or derive extrinsics $(\mathbf{R}_{\text{AVP←RS}}, \mathbf{t}_{\text{AVP←RS}})$
+    \item Reproject depth via 3D transformation and Z-buffering (detailed in §\ref{sec:realsense_transform})
+    \item Normalize aligned depth to 0-255 disparity map
+\end{enumerate}
+
+\textbf{Performance:} 33ms hardware capture + 20-50ms reprojection ≈ 50-80ms total
+
+\subsubsection{RealSense to AVP Coordinate Transformation}
+\label{sec:realsense_transform}
+
+The RealSense depth sensor and the Apple Vision Pro main camera occupy different physical positions and orientations. To align RealSense depth with AVP's RGB view, we perform a full 3D reprojection with Z-buffering.
+
+\paragraph{Mathematical Formulation}
+
+Let:
+\begin{itemize}
+    \item $\mathbf{K}_{\text{RS}} \in \mathbb{R}^{3 \times 3}$ -- RealSense color camera intrinsics
+    \item $\mathbf{K}_{\text{AVP}} \in \mathbb{R}^{3 \times 3}$ -- AVP camera intrinsics
+    \item $\mathbf{R}_{\text{AVP←RS}} \in \text{SO}(3)$ -- Rotation from RS color frame to AVP frame
+    \item $\mathbf{t}_{\text{AVP←RS}} \in \mathbb{R}^3$ -- Translation from RS color frame to AVP frame
+    \item $D_{\text{RS}}(u, v)$ -- Depth map in RealSense color frame (meters)
+\end{itemize}
+
+\textbf{Step 1: Back-projection to 3D in RealSense Frame}
+
+For each pixel $(u, v)$ with depth $Z = D_{\text{RS}}(u, v)$:
+\[
+\begin{bmatrix} X \\ Y \\ Z \end{bmatrix}_{\text{RS}}
+= Z \cdot \mathbf{K}_{\text{RS}}^{-1} \begin{bmatrix} u \\ v \\ 1 \end{bmatrix}
+= \begin{bmatrix}
+\frac{(u - c_x) \cdot Z}{f_x} \\
+\frac{(v - c_y) \cdot Z}{f_y} \\
+Z
+\end{bmatrix}_{\text{RS}}
+\]
+
+where $f_x, f_y, c_x, c_y$ are intrinsic parameters from $\mathbf{K}_{\text{RS}}$.
+
+\textbf{Step 2: Transform to AVP Frame}
+
+Apply rigid transformation:
+\[
+\begin{bmatrix} X \\ Y \\ Z \end{bmatrix}_{\text{AVP}}
+= \mathbf{R}_{\text{AVP←RS}} \begin{bmatrix} X \\ Y \\ Z \end{bmatrix}_{\text{RS}}
++ \mathbf{t}_{\text{AVP←RS}}
+\]
+
+\textbf{Step 3: Project to AVP Image Plane}
+
+For valid points with $Z_{\text{AVP}} > \epsilon$:
+\[
+\begin{bmatrix} u' \\ v' \\ 1 \end{bmatrix}
+= \frac{1}{Z_{\text{AVP}}} \mathbf{K}_{\text{AVP}} \begin{bmatrix} X \\ Y \\ Z \end{bmatrix}_{\text{AVP}}
+\]
+
+\[
+u' = \frac{f'_x \cdot X_{\text{AVP}}}{Z_{\text{AVP}}} + c'_x, \quad
+v' = \frac{f'_y \cdot Y_{\text{AVP}}}{Z_{\text{AVP}}} + c'_y
+\]
+
+\textbf{Step 4: Z-Buffer Splatting}
+
+Multiple RealSense pixels may project to the same AVP pixel. To resolve occlusion correctly, we maintain a depth buffer:
+
+\begin{algorithmic}
+\STATE Initialize: $D_{\text{AVP}}(u', v') \leftarrow \infty$ for all pixels
+\FOR{each valid 3D point with projection $(u'_i, v'_i, Z_i)$}
+    \IF{$Z_i < D_{\text{AVP}}(u'_i, v'_i)$}
+        \STATE $D_{\text{AVP}}(u'_i, v'_i) \leftarrow Z_i$ \quad \textcolor{gray}{\textit{(keep nearest)}}
+    \ENDIF
+\ENDFOR
+\STATE Replace $\infty$ with 0 for unfilled pixels
+\end{algorithmic}
+
+This ensures proper occlusion handling where nearer surfaces occlude farther ones.
+
+\paragraph{Extrinsics Calibration}
+
+The transformation $(\mathbf{R}_{\text{AVP←RS}}, \mathbf{t}_{\text{AVP←RS}})$ can be obtained via:
+
+\textbf{Option 1: Manual Calibration}
+
+Pre-calibrate using a checkerboard or ArUco board visible to both cameras simultaneously. Store in \texttt{extrinsics\_avp\_from\_rs\_color.json}:
+
+\begin{verbatim}
+{
+  "R": [[r11, r12, r13], [r21, r22, r23], [r31, r32, r33]],
+  "t": [tx, ty, tz]
+}
+\end{verbatim}
+
+\textbf{Option 2: Runtime Estimation}
+
+If both cameras detect the same ArUco board simultaneously:
+\begin{enumerate}
+    \item Solve PnP to get $\mathbf{T}_{\text{RS}}^{\text{board}}$ and $\mathbf{T}_{\text{AVP}}^{\text{board}}$
+    \item Compute relative transform: $\mathbf{T}_{\text{AVP←RS}} = \mathbf{T}_{\text{AVP}}^{\text{board}} \cdot (\mathbf{T}_{\text{RS}}^{\text{board}})^{-1}$
+    \item Extract $\mathbf{R}_{\text{AVP←RS}}$ and $\mathbf{t}_{\text{AVP←RS}}$
+\end{enumerate}
+
+This method is less stable but enables automatic online calibration.
+
+\subsubsection{ArUco Board Configuration}
+
+The system uses a 3×4 grid of ArUco markers (12 total) from dictionary DICT\_4X4\_50:
+
+\begin{itemize}
+    \item \textbf{Marker size:} 30mm × 30mm
+    \item \textbf{Separation:} 10mm
+    \item \textbf{Total board size:} 190mm × 150mm
+\end{itemize}
+
+\paragraph{3D Marker Layout}
+
+Marker ID $i \in \{0, 1, \ldots, 11\}$ maps to board position:
+
+\[
+\text{row} = \lfloor i / 4 \rfloor, \quad \text{col} = i \mod 4
+\]
+
+Corner positions in board frame (Z=0 plane):
+
+\[
+\mathbf{p}_{\text{corner}_k}^{(i)} = \begin{bmatrix}
+x_0 + k_x \cdot s \\
+y_0 + k_y \cdot s \\
+0
+\end{bmatrix}, \quad k \in \{0, 1, 2, 3\}
+\]
+
+where:
+\[
+x_0 = \text{col} \cdot (s + d), \quad
+y_0 = \text{row} \cdot (s + d), \quad
+s = 0.030\,\text{m}, \quad
+d = 0.010\,\text{m}
+\]
+
+and $(k_x, k_y) \in \{(0,0), (1,0), (1,1), (0,1)\}$ for corners in order.
+
+\paragraph{Pose Estimation via PnP}
+
+Given detected marker corners in image $\{(u_j, v_j)\}$ and corresponding 3D points $\{\mathbf{p}_j\}$:
+
+\begin{enumerate}
+    \item Concatenate all 2D and 3D correspondences from detected markers
+    \item Solve PnP with IPPE algorithm: $\min_{\mathbf{R}, \mathbf{t}} \sum_j \| \pi(\mathbf{R}\mathbf{p}_j + \mathbf{t}) - (u_j, v_j) \|^2$
+    \item Fallback to standard PnP if IPPE fails
+    \item Return rotation vector $\mathbf{r} \in \mathbb{R}^3$ and translation $\mathbf{t} \in \mathbb{R}^3$
+\end{enumerate}
+
+\subsubsection{Main API Server}
+
+The \texttt{main\_api.py} Flask server provides RESTful endpoints for the entire system:
+
+\paragraph{Frame Processing Endpoints}
+
+\begin{itemize}
+    \item \texttt{POST /receive\_frame} -- Accept RGB frame, process through CV pipeline
+    \item \texttt{GET /rgb\_frame} -- Retrieve last raw frame
+    \item \texttt{GET /detected\_frame} -- Retrieve frame with ArUco markers annotated
+    \item \texttt{GET /intrinsics} -- Camera intrinsics matrix
+    \item \texttt{GET /pose} -- Last detected board pose (rvec, tvec)
+    \item \texttt{GET /mask} -- ROI mask as base64 PNG
+    \item \texttt{GET /depth} -- Depth map as base64 PNG
+    \item \texttt{GET /disparity} -- Disparity map as base64 PNG
+\end{itemize}
+
+\paragraph{Head Pose Tracking}
+
+\begin{itemize}
+    \item \texttt{POST /head\_pose} -- Receive head tracking data from Vision Pro
+    \item \texttt{GET /head\_pose} -- Retrieve last head pose with age
+\end{itemize}
+
+Head pose format (JSON):
+\begin{verbatim}
+{
+  "position": [x, y, z],           // meters
+  "rotation": [roll, pitch, yaw],  // radians
+  "quaternion": [qx, qy, qz, qw],  // unit quaternion
+  "timestamp": 1699876543.21,      // Unix time
+  "confidence": 0.95
+}
+\end{verbatim}
+
+\paragraph{Model Management}
+
+\begin{itemize}
+    \item \texttt{GET /models} -- List available .ply CAD models
+    \item \texttt{GET /model?name=X} -- Download specific model (base64)
+    \item \texttt{POST /select\_model} -- Set active model for pose estimation
+\end{itemize}
+
+\paragraph{AVP Pose Estimation Endpoint}
+
+\texttt{POST /avp\_pose} -- Primary endpoint for Vision Pro pose requests
+
+\textbf{Request payload:}
+\begin{verbatim}
+{
+  "rgb_frame": "data:image/jpeg;base64,...",
+  "camera_matrix": [[fx,0,cx],[0,fy,cy],[0,0,1]],
+  "depth_map": "data:image/png;base64,...",  // optional
+  "mask": "data:image/jpeg;base64,...",      // optional
+  "model_name": "cube.ply"                   // optional
+}
+\end{verbatim}
+
+\textbf{Processing flow:}
+\begin{enumerate}
+    \item Validate request and load selected CAD model
+    \item Use provided depth/mask or fetch from CV pipeline cache
+    \item Forward to pose estimation API with full payload
+    \item Receive 4×4 transformation matrix $\mathbf{T}_{\text{object}}^{\text{camera}}$
+    \item Apply head pose correction (if available)
+    \item Return corrected pose to client
+\end{enumerate}
+
+\subsubsection{Head Pose Correction}
+
+To compensate for head motion between frame capture and pose rendering, the backend applies a correction transform.
+
+\paragraph{Quaternion to Rotation Matrix}
+
+Vision Pro provides head orientation as quaternion $\mathbf{q} = (q_x, q_y, q_z, q_w)$. Convert to rotation matrix:
+
+\[
+\mathbf{R}_{\text{head}} = \begin{bmatrix}
+1 - 2(q_y^2 + q_z^2) & 2(q_x q_y - q_w q_z) & 2(q_x q_z + q_w q_y) \\
+2(q_x q_y + q_w q_z) & 1 - 2(q_x^2 + q_z^2) & 2(q_y q_z - q_w q_x) \\
+2(q_x q_z - q_w q_y) & 2(q_y q_z + q_w q_x) & 1 - 2(q_x^2 + q_y^2)
+\end{bmatrix}
+\]
+
+\paragraph{Transformation Composition}
+
+Build head transformation matrix:
+\[
+\mathbf{T}_{\text{head}} = \begin{bmatrix}
+\mathbf{R}_{\text{head}} & \mathbf{t}_{\text{head}} \\
+\mathbf{0}^T & 1
+\end{bmatrix}
+\]
+
+Apply correction:
+\[
+\mathbf{T}_{\text{corrected}} = \mathbf{T}_{\text{head}} \cdot \mathbf{T}_{\text{object}}
+\]
+
+This compensates for head motion, ensuring the overlay remains anchored to the physical object even as the user moves.
+
+\textbf{Staleness Check:} Head pose data older than 1 second is ignored to prevent incorrect corrections.
+
+\subsection{VisionOS Client Application}
+
+\subsubsection{Application Structure}
+
+The \texttt{PoseOverlayApp} is built with SwiftUI and RealityKit, leveraging Vision Pro's spatial computing capabilities.
+
+\textbf{Core Components:}
+\begin{itemize}
+    \item \texttt{AppModel} -- Global state (base URL, selected model, settings)
+    \item \texttt{ImmersiveSpaceView} -- AR scene with RealityKit rendering
+    \item \texttt{PoseService} -- Networking layer for backend communication
+    \item \texttt{SensorDataModel} -- ARKit integration for head tracking
+    \item \texttt{LogStore} -- Timestamped event logging for debugging
+\end{itemize}
+
+\subsubsection{Pose Service and Snapshot Retrieval}
+
+The \texttt{PoseService} enum provides a stateless API for fetching pose data from the Python backend.
+
+\paragraph{Snapshot Acquisition}
+
+Before requesting a pose, the client fetches a complete snapshot from the pipeline:
+
+\begin{verbatim}
+struct PipelineSnapshot {
+    let rgbFrame: String          // base64 JPEG
+    let cameraMatrix: [[Double]]  // 3x3 intrinsics
+    let mask: String?             // base64 from /mask
+    let depthMap: String?         // base64 PNG from /disparity
+}
+\end{verbatim}
+
+All endpoints are queried concurrently using Swift's \texttt{async/await}:
+
+\begin{verbatim}
+async let rgbTask = fetchRGBFrame(baseURL: baseURL)
+async let intrinsicsTask = fetchIntrinsics(baseURL: baseURL)
+async let maskTask = fetchOptionalMask(baseURL: baseURL)
+async let depthTask = fetchOptionalDisparity(baseURL: baseURL)
+\end{verbatim}
+
+\paragraph{Pose Request}
+
+Payload is assembled and sent to \texttt{/avp\_pose}:
+
+\begin{verbatim}
+POST /avp_pose
+{
+  "rgb_frame": snapshot.rgbFrame,
+  "camera_matrix": snapshot.cameraMatrix,
+  "depth_map": snapshot.depthMap,
+  "mask": snapshot.mask,
+  "model_name": selectedModel
+}
+\end{verbatim}
+
+Response contains transformation matrices as 4×4 nested arrays.
+
+\subsubsection{Coordinate System Transformations}
+
+\paragraph{OpenCV to RealityKit Conversion}
+
+The backend returns poses in OpenCV convention (right-handed, Z-forward, Y-down). RealityKit uses a different convention (right-handed, Z-backward, Y-up). The client applies a conversion:
+
+\[
+\mathbf{T}_{\text{RK}} = \mathbf{C} \cdot \mathbf{T}_{\text{CV}}
+\]
+
+where the conversion matrix is:
+
+\[
+\mathbf{C} = \begin{bmatrix}
+1 & 0 & 0 & 0 \\
+0 & -1 & 0 & 0 \\
+0 & 0 & -1 & 0 \\
+0 & 0 & 0 & 1
+\end{bmatrix}
+\]
+
+This flips the Y and Z axes to match RealityKit's coordinate frame.
+
+\paragraph{SE(3) Representation}
+
+All transformations are members of the special Euclidean group $\text{SE}(3)$:
+
+\[
+\mathbf{T} = \begin{bmatrix}
+\mathbf{R} & \mathbf{t} \\
+\mathbf{0}^T & 1
+\end{bmatrix} \in \text{SE}(3), \quad
+\mathbf{R} \in \text{SO}(3), \quad
+\mathbf{t} \in \mathbb{R}^3
+\]
+
+Composition: $\mathbf{T}_1 \cdot \mathbf{T}_2$ represents applying $\mathbf{T}_2$ then $\mathbf{T}_1$
+
+Inverse: $\mathbf{T}^{-1} = \begin{bmatrix} \mathbf{R}^T & -\mathbf{R}^T \mathbf{t} \\ \mathbf{0}^T & 1 \end{bmatrix}$
+
+\subsubsection{Immersive Space and Rendering}
+
+\paragraph{Scene Hierarchy}
+
+\begin{verbatim}
+HeadAnchor (AnchorEntity .head)
+├── PoseOverlayRoot (Entity at [0, 0, -1])
+│   └── poseArrow_0..N (ModelEntity per pose)
+└── HeadAxes (Visualization entity)
+    ├── X-axis (red)
+    ├── Y-axis (green)
+    └── Z-axis (blue)
+\end{verbatim}
+
+The root container is positioned 1 meter in front of the user's head and remains head-locked. Pose entities are added as children with transforms from the backend.
+
+\paragraph{Polling Loop}
+
+The app uses a background task to continuously poll for pose updates:
+
+\begin{verbatim}
+while !Task.isCancelled {
+    let transforms = try await PoseService.fetchTransforms(
+        baseURL: baseURL,
+        modelName: selectedModel
+    )
+    await MainActor.run {
+        update(container: container, with: transforms)
+    }
+    try? await Task.sleep(nanoseconds: 2_000_000_000) // 2s
+}
+\end{verbatim}
+
+Each iteration:
+\begin{enumerate}
+    \item Fetches snapshot from backend
+    \item Requests pose estimation
+    \item Converts matrices to RealityKit format
+    \item Updates scene entities on main actor
+\end{enumerate}
+
+\paragraph{Model Rendering}
+
+For each transformation matrix $\mathbf{T}_i$:
+\begin{enumerate}
+    \item Create or retrieve arrow entity (visual placeholder for CAD model)
+    \item Convert matrix to \texttt{simd\_float4x4}
+    \item Apply RealityKit coordinate conversion
+    \item Set entity transform: \texttt{entity.transform = Transform(matrix: T)}
+    \item Add to scene container
+\end{enumerate}
+
+\subsubsection{Sensor Integration}
+
+\paragraph{ARKit Head Tracking}
+
+The \texttt{SensorDataModel} wraps ARKit's world tracking:
+
+\begin{itemize}
+    \item Provides real-time head position and orientation
+    \item Updates UI-bound \texttt{@Published} properties
+    \item Sends periodic updates to backend \texttt{/head\_pose} endpoint
+\end{itemize}
+
+Head orientation is represented as a quaternion and synchronized with the axes visualization entity for debugging.
+
+\subsection{Integration and Workflow}
+
+\subsubsection{End-to-End Dataflow}
+
+\textbf{Phase 1: Initialization}
+\begin{enumerate}
+    \item Vision Pro app starts, user enters backend URL
+    \item App queries \texttt{/models} to populate model picker
+    \item User selects CAD model, app sends \texttt{POST /select\_model}
+    \item Immersive space opens, polling task starts
+\end{enumerate}
+
+\textbf{Phase 2: Runtime Loop}
+\begin{enumerate}
+    \item Backend CV pipeline processes screen-captured frames (or RealSense if available)
+    \item Pipeline caches: RGB, intrinsics, mask, depth/disparity, ArUco pose
+    \item Vision Pro polls backend every 2s
+    \item \texttt{PoseService} fetches snapshot (RGB, K, mask, depth) concurrently
+    \item Snapshot + model sent to \texttt{/avp\_pose}
+    \item Backend forwards to pose API, receives $\mathbf{T}_{\text{object}}$
+    \item Backend applies head pose correction if available
+    \item Client receives corrected pose, converts to RealityKit coordinates
+    \item RealityKit renders CAD overlay at pose location
+\end{enumerate}
+
+\textbf{Phase 3: Head Tracking Correction}
+\begin{enumerate}
+    \item Vision Pro continuously tracks head pose via ARKit
+    \item \texttt{SensorDataModel} sends updates to \texttt{POST /head\_pose}
+    \item Backend caches latest head pose with timestamp
+    \item When pose estimate arrives, backend checks head pose freshness
+    \item If $\Delta t < 1\text{s}$, apply correction: $\mathbf{T}_{\text{out}} = \mathbf{T}_{\text{head}} \cdot \mathbf{T}_{\text{object}}$
+    \item Corrected pose sent to client
+\end{enumerate}
+
+\subsubsection{Concurrency Design}
+
+\paragraph{Backend: Threaded Processing}
+
+\begin{itemize}
+    \item \textbf{Main thread:} Flask request handlers
+    \item \textbf{Pipeline state:} Protected by threading locks
+    \item \textbf{Frame capture:} Independent thread (screen\_capture.py or RealSense)
+    \item \textbf{Depth inference:} Asynchronous GPU execution
+\end{itemize}
+
+\paragraph{Client: Swift Concurrency}
+
+\begin{itemize}
+    \item \textbf{MainActor:} UI updates, RealityKit scene mutations
+    \item \textbf{Background tasks:} Polling loop, network requests
+    \item \textbf{async/await:} Concurrent snapshot fetching
+    \item \textbf{Actors:} \texttt{SensorDataModel} for ARKit isolation
+\end{itemize}
+
+\subsection{Performance Analysis}
+
+\subsubsection{Latency Breakdown}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|l|r|r|}
+\hline
+\textbf{Stage} & \textbf{Transformers Mode} & \textbf{RealSense Mode} \\
+\hline
+Frame capture & 33ms & 33ms \\
+ArUco detection & 5-10ms & 5-10ms \\
+Depth acquisition & 50-100ms (GPU) & 33ms (hw) \\
+Depth alignment & N/A & 20-50ms \\
+Mask extraction & 2-5ms & 2-5ms \\
+PNG encoding & 5-10ms & 5-10ms \\
+Network (AVP↔backend) & 10-50ms & 10-50ms \\
+Pose API inference & 100-500ms & 100-500ms \\
+Head pose correction & <1ms & <1ms \\
+RealityKit rendering & 16ms (60fps) & 16ms (60fps) \\
+\hline
+\textbf{Total (approx)} & \textbf{220-730ms} & \textbf{190-660ms} \\
+\hline
+\end{tabular}
+\caption{Per-frame latency breakdown for both depth modes}
+\label{tab:latency}
+\end{table}
+
+\subsubsection{Optimization Strategies}
+
+\begin{enumerate}
+    \item \textbf{Depth caching:} Reuse disparity across multiple pose requests if intrinsics unchanged
+    \item \textbf{ROI cropping:} Reduce inference resolution to speed up depth estimation
+    \item \textbf{Model quantization:} Use INT8 quantized depth models for faster inference
+    \item \textbf{Parallel requests:} Client fetches snapshot components concurrently
+    \item \textbf{GPU batching:} Process multiple frames in batch for higher throughput
+\end{enumerate}
+
+\subsection{Configuration and Deployment}
+
+\subsubsection{Backend Configuration}
+
+Edit \texttt{app\_config.py}:
+
+\begin{verbatim}
+APP_CONFIG = {
+    "main_api": {"host": "0.0.0.0", "port": 5000},
+    "pose_api": {"base_url": "http://pose-server:9000"},
+    "defaults": {
+        "use_realsense": False,  # Toggle depth mode
+        "model_name": "cube.ply",
+        "use_random_pose": False  # Use real pose API
+    }
+}
+\end{verbatim}
+
+\subsubsection{Launch Sequence}
+
+\textbf{Terminal 1 -- Backend API:}
+\begin{verbatim}
+cd AW19
+python main_api.py
+# Listens on http://0.0.0.0:5000
+\end{verbatim}
+
+\textbf{Terminal 2 -- Frame Capture (if not using RealSense):}
+\begin{verbatim}
+python screen_capture.py
+# Sends frames to /receive_frame
+\end{verbatim}
+
+\textbf{Terminal 3 -- Debug Viewer (optional):}
+\begin{verbatim}
+python full_python_pipeline/tk_debugging_unified.py
+# Shows: RGB, Mask, Depth, Disparity, Pose
+\end{verbatim}
+
+\textbf{Vision Pro:}
+\begin{enumerate}
+    \item Build and run \texttt{PoseOverlayApp} in Xcode
+    \item Enter backend URL (e.g., \texttt{http://192.168.1.100:5000})
+    \item Select model from picker
+    \item Tap "Open Immersive Space"
+    \item Point device at ArUco board and wait for pose overlay
+\end{enumerate}
+
+\subsection{Summary}
+
+This chapter presented the complete implementation spanning:
+
+\begin{itemize}
+    \item \textbf{Python Backend:} Unified CV pipeline with dual depth support, ArUco detection, head pose correction
+    \item \textbf{RealSense Integration:} 3D reprojection with Z-buffering for metric depth alignment
+    \item \textbf{VisionOS Client:} RealityKit-based AR rendering with snapshot fetching and coordinate conversion
+    \item \textbf{Geometric Transformations:} SE(3) pose representations, quaternion conversions, frame transformations
+    \item \textbf{System Integration:} RESTful API design, concurrent processing, latency optimization
+\end{itemize}
+
+The modular architecture enables flexible deployment across different hardware configurations while maintaining a consistent interface for pose estimation and AR visualization.
