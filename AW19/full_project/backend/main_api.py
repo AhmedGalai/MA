@@ -146,6 +146,18 @@ def load_mesh_as_b64(path: str) -> str:
         print(f"[ERROR] load_mesh_as_b64: {e}")
         raise
 
+def strip_data_uri(base64_str: str) -> str:
+    """
+    Strip data URI prefix from base64 string if present
+    Converts "data:image/jpeg;base64,ABC123..." to "ABC123..."
+    Returns empty string if input is None or empty
+    """
+    if not base64_str:
+        return ""
+    if ',' in base64_str:
+        return base64_str.split(',', 1)[1]
+    return base64_str
+
 # ------------------ API Endpoints ------------------
 @app.route('/health', methods=['GET'])
 def health():
@@ -532,16 +544,17 @@ def avp_pose():
 
         # Prepare payload for pose estimation API (match pose_api schema)
         # pose_api expects: images: [{filename, rgb, depth}]
+        # Strip data URI prefixes to ensure consistent plain base64 encoding
         image_item = {
             "filename": "frame",
-            "rgb": rgb_frame,
-            "depth": depth_map or ""
+            "rgb": strip_data_uri(rgb_frame),
+            "depth": strip_data_uri(depth_map) if depth_map else ""
         }
         payload = {
             "camera_matrix": camera_matrix,
             "images": [image_item],
-            "mask": mask,
-            "mesh": mesh_b64,
+            "mask": strip_data_uri(mask),
+            "mesh": mesh_b64,  # Already plain base64
             "sequence": False,
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")
         }
