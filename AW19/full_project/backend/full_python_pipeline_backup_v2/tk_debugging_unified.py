@@ -9,10 +9,10 @@ Complete debugging client with all necessary feeds and controls:
 - RGB feed with 6D pose overlay
 - Final clean binary mask (ROI circle only)
 - ROI threshold controls (color picker with tolerance sliders)
+- Hough circle transformation for clean ROI
 - API connection controls
 - UI refresh rate control
 - Data display from main API
-- Save frame data functionality
 """
 
 import time
@@ -25,10 +25,6 @@ from PIL import Image, ImageTk
 import requests
 import base64
 import io
-import os
-import json
-from datetime import datetime
-import trimesh
 
 # ------------------ Configuration ------------------
 try:
@@ -83,6 +79,73 @@ def apply_colormap_for_depth(img_array, colormap=cv.COLORMAP_TURBO):
     colored = cv.applyColorMap(normalized, colormap)
     return colored
 
+def detect_roi_circle_hough(binary_mask):
+    """
+    Use Hough Circle Transform to detect the ROI circle.
+    Returns: (x, y, radius) or None
+    Falls back to None if detection fails.
+    """
+    if binary_mask is None or binary_mask.size == 0:
+        return None
+
+    try:
+        # Ensure single channel uint8
+        if binary_mask.ndim == 3:
+            binary_mask = cv.cvtColor(binary_mask, cv.COLOR_BGR2GRAY)
+
+        if binary_mask.dtype != np.uint8:
+            binary_mask = binary_mask.astype(np.uint8)
+
+        # Apply some morphological operations to clean up the mask
+        kernel = np.ones((5, 5), np.uint8)
+        cleaned = cv.morphologyEx(binary_mask, cv.MORPH_CLOSE, kernel)
+        cleaned = cv.morphologyEx(cleaned, cv.MORPH_OPEN, kernel)
+
+        # Detect circles using Hough transform
+        circles = cv.HoughCircles(
+            cleaned,
+            cv.HOUGH_GRADIENT,
+            dp=1,
+            minDist=100,
+            param1=50,
+            param2=30,
+            minRadius=20,
+            maxRadius=300
+        )
+
+        if circles is not None and len(circles) > 0:
+            circles = np.uint16(np.around(circles))
+            # Take the first (strongest) circle
+            x, y, r = circles[0, 0]
+            return (int(x), int(y), int(r))
+
+        return None
+    except Exception as e:
+        print(f"[WARNING] Hough circle detection failed: {e}")
+        return None
+
+def create_clean_roi_mask(binary_mask, circle_params):
+    """
+    Create a clean binary mask with only the ROI circle, rest is black.
+
+    Args:
+        binary_mask: Original binary mask
+        circle_params: (x, y, radius) from Hough circle detection
+
+    Returns:
+        Clean mask with only the circle region
+    """
+    if circle_params is None:
+        return binary_mask
+
+    try:
+        x, y, r = circle_params
+        clean_mask = np.zeros_like(binary_mask)
+        cv.circle(clean_mask, (x, y), r, 255, -1)  # Fill circle with white
+        return clean_mask
+    except Exception as e:
+        print(f"[ERROR] create_clean_roi_mask: {e}")
+        return binary_mask
 
 def draw_6d_pose_overlay(rgb_frame, pose_data, intrinsics_data):
     """
@@ -295,9 +358,6 @@ class EnhancedDebugViewer:
         self.photo_refs = {}
         self.ui_refresh_hz = DEFAULT_UI_HZ
         self.use_realsense = False
-        self.use_reverse_rs = False  # Reverse RealSense approach
-        self.save_next_frame = False  # Flag to save next frame
-        self.latest_data = None  # Store latest data for saving
 
         # ROI parameters
         self.hsv_center = DEFAULT_HSV.copy()
@@ -436,13 +496,6 @@ class EnhancedDebugViewer:
                                           command=self.toggle_realsense)
         self.rs_toggle.pack(side=tk.LEFT, padx=20)
 
-        # Reverse RealSense toggle
-        self.reverse_rs_var = tk.BooleanVar(value=self.use_reverse_rs)
-        self.reverse_rs_toggle = ttk.Checkbutton(ui_frame, text="Reverse RS Mode",
-                                                   variable=self.reverse_rs_var,
-                                                   command=self.toggle_reverse_rs)
-        self.reverse_rs_toggle.pack(side=tk.LEFT, padx=5)
-
         # Random pose toggle
         self.random_pose_var = tk.BooleanVar(value=False)
         self.random_pose_toggle = ttk.Checkbutton(ui_frame, text="Use Random Pose",
@@ -459,9 +512,6 @@ class EnhancedDebugViewer:
 
         # RealSense panel button
         ttk.Button(ui_frame, text="Open RealSense Panel", command=self.open_rs_panel).pack(side=tk.LEFT, padx=5)
-
-        # Save next frame button
-        ttk.Button(ui_frame, text="Save Next Frame", command=self.trigger_save_frame).pack(side=tk.LEFT, padx=5)
 
     def _build_image_grid(self, parent):
         """Build the image grid (2 rows x 3 columns)"""
@@ -597,45 +647,6 @@ class EnhancedDebugViewer:
             # Revert checkbox
             self.rs_var.set(not self.use_realsense)
 
-    def toggle_reverse_rs(self):
-        """Toggle reverse RealSense mode"""
-        self.use_reverse_rs = self.reverse_rs_var.get()
-
-        if self.use_reverse_rs:
-            # Check if RealSense is available
-            try:
-                response = self.client.session.get(f"{self.client.base_url}/stats", timeout=1)
-                if response.status_code == 200:
-                    stats = response.json()
-                    rs_available = stats.get('cv_pipeline', {}).get('realsense_available', False)
-
-                    if not rs_available:
-                        messagebox.showwarning(
-                            "RealSense Not Available",
-                            "RealSense camera is not available. Reverse RS mode requires RealSense hardware."
-                        )
-                        self.reverse_rs_var.set(False)
-                        self.use_reverse_rs = False
-                        return
-
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to check RealSense availability: {e}")
-                self.reverse_rs_var.set(False)
-                self.use_reverse_rs = False
-                return
-
-            messagebox.showinfo(
-                "Reverse RealSense Mode",
-                "Reverse RS Mode enabled.\n\n"
-                "In this mode:\n"
-                "• AVP mask is transformed to RealSense view\n"
-                "• RealSense RGB, intrinsics, and depth are used for pose estimation\n"
-                "• Returned 6D pose is transformed back to AVP view\n\n"
-                "Use this mode for pose estimation in RealSense native space."
-            )
-        else:
-            messagebox.showinfo("Reverse RealSense Mode", "Reverse RS Mode disabled. Using standard AVP view.")
-
     def toggle_random_pose(self):
         """Toggle random pose mode"""
         use_random = self.random_pose_var.get()
@@ -709,14 +720,6 @@ class EnhancedDebugViewer:
             config = self.client.get_config()
             stats = self.client.get_stats()
 
-            # Store latest data for potential saving
-            self.latest_data = data
-
-            # Check if we should save this frame
-            if self.save_next_frame:
-                self.save_next_frame = False
-                self.save_frame_data(data, config)
-
             # Update images
             self.root.after(0, self._update_images, data)
 
@@ -759,8 +762,15 @@ class EnhancedDebugViewer:
             # Binary mask
             if 'mask' in data:
                 self._set_image('mask', data['mask'])
-                # Show original mask without Hough transform refinement
-                self._set_image('clean_mask', data['mask'])
+
+                # Create clean ROI mask with Hough circle detection
+                circle_params = detect_roi_circle_hough(data['mask'])
+                if circle_params:
+                    clean_mask = create_clean_roi_mask(data['mask'], circle_params)
+                    self._set_image('clean_mask', clean_mask)
+                else:
+                    # If no circle detected, show original mask
+                    self._set_image('clean_mask', data['mask'])
 
         except Exception as e:
             print(f"[ERROR] _update_images: {e}")
@@ -877,156 +887,6 @@ class EnhancedDebugViewer:
             self.status_label.config(text="Status: Connected ✓", foreground="green")
         else:
             self.status_label.config(text="Status: Disconnected ✗", foreground="red")
-
-    def trigger_save_frame(self):
-        """Trigger saving the next frame"""
-        self.save_next_frame = True
-        messagebox.showinfo("Save Frame", "Next frame will be saved to ./saved_pose_requests/")
-
-    def save_frame_data(self, data, config):
-        """Save frame data to disk"""
-        try:
-            # Create timestamp-based directory
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            frame_dir = os.path.join("saved_pose_requests", f"frame_{timestamp}")
-            os.makedirs(frame_dir, exist_ok=True)
-
-            # Save RGB image
-            if 'rgb_frame' in data and data['rgb_frame'] is not None:
-                rgb_path = os.path.join(frame_dir, "rgb.png")
-                cv.imwrite(rgb_path, cv.cvtColor(data['rgb_frame'], cv.COLOR_RGB2BGR))
-                print(f"[INFO] Saved RGB to {rgb_path}")
-
-            # Save depth (disparity) image
-            if 'disparity' in data and data['disparity'] is not None:
-                depth_path = os.path.join(frame_dir, "depth.png")
-                # Save as 16-bit PNG for depth preservation
-                depth_data = data['disparity']
-                if depth_data.dtype != np.uint16:
-                    # Normalize to 16-bit range
-                    depth_min = depth_data.min()
-                    depth_max = depth_data.max()
-                    if depth_max > depth_min:
-                        depth_normalized = ((depth_data - depth_min) / (depth_max - depth_min) * 65535).astype(np.uint16)
-                    else:
-                        depth_normalized = np.zeros_like(depth_data, dtype=np.uint16)
-                else:
-                    depth_normalized = depth_data
-                cv.imwrite(depth_path, depth_normalized)
-                print(f"[INFO] Saved depth to {depth_path}")
-
-            # Save mask image
-            if 'mask' in data and data['mask'] is not None:
-                mask_path = os.path.join(frame_dir, "mask.png")
-                cv.imwrite(mask_path, data['mask'])
-                print(f"[INFO] Saved mask to {mask_path}")
-
-            # Save camera intrinsics (K matrix)
-            if 'intrinsics' in data and data['intrinsics'] is not None:
-                K = np.array(data['intrinsics'].get('K', [[1, 0, 0], [0, 1, 0], [0, 0, 1]]))
-                cam_K_path = os.path.join(frame_dir, "cam_K.txt")
-                np.savetxt(cam_K_path, K, fmt='%.6f')
-                print(f"[INFO] Saved camera matrix to {cam_K_path}")
-
-            # Save pose data (transformation matrix)
-            if 'pose' in data and data['pose'] is not None:
-                pose_data = data['pose']
-
-                # If we have rvec and tvec, convert to transformation matrix
-                if 'rvec' in pose_data and 'tvec' in pose_data:
-                    rvec = np.array(pose_data['rvec']).reshape(3, 1)
-                    tvec = np.array(pose_data['tvec']).reshape(3, 1)
-
-                    # Convert rotation vector to rotation matrix
-                    R, _ = cv.Rodrigues(rvec)
-
-                    # Create 4x4 transformation matrix
-                    T = np.eye(4)
-                    T[:3, :3] = R
-                    T[:3, 3] = tvec.flatten()
-
-                    pose_path = os.path.join(frame_dir, "final_pose.txt")
-                    np.savetxt(pose_path, T, fmt='%.6f')
-                    print(f"[INFO] Saved pose to {pose_path}")
-
-            # Try to get and save mesh from API
-            try:
-                # Get current model name from stats
-                stats = self.client.get_stats()
-                if stats and 'selected_model' in stats:
-                    model_name = stats['selected_model']
-
-                    # Try to load the mesh file
-                    models_dir = os.path.join(os.path.dirname(__file__), "models")
-                    mesh_source_path = os.path.join(models_dir, model_name)
-
-                    if os.path.exists(mesh_source_path):
-                        mesh_dest_path = os.path.join(frame_dir, "mesh.ply")
-                        # Copy mesh file
-                        import shutil
-                        shutil.copy(mesh_source_path, mesh_dest_path)
-                        print(f"[INFO] Saved mesh to {mesh_dest_path}")
-            except Exception as e:
-                print(f"[WARNING] Could not save mesh: {e}")
-
-            # Save metadata
-            metadata_dir = os.path.join(frame_dir, "metadata")
-            os.makedirs(metadata_dir, exist_ok=True)
-
-            # Save settings/config
-            if config:
-                settings_path = os.path.join(metadata_dir, "settings.json")
-                with open(settings_path, 'w') as f:
-                    json.dump(config, f, indent=2)
-                print(f"[INFO] Saved settings to {settings_path}")
-
-            # Save head pose if available
-            if 'head_pose' in data and data['head_pose'] is not None:
-                head_pose_path = os.path.join(metadata_dir, "avp_head_pose.json")
-                with open(head_pose_path, 'w') as f:
-                    json.dump(data['head_pose'], f, indent=2)
-                print(f"[INFO] Saved AVP head pose to {head_pose_path}")
-
-            # Try to get RealSense pose and transformation matrix if available
-            try:
-                from realsense_adapter_adjusted import RealSenseToAVPAligner
-                rs_adapter = RealSenseToAVPAligner()
-
-                if rs_adapter.available and rs_adapter.R_avp_rs_c is not None:
-                    # Save transformation matrix
-                    transform_data = {
-                        "R_avp_rs_c": rs_adapter.R_avp_rs_c.tolist(),
-                        "t_avp_rs_c": rs_adapter.t_avp_rs_c.tolist() if hasattr(rs_adapter, 't_avp_rs_c') else [0, 0, 0],
-                        "K_rs_c": rs_adapter.K_rs_c.tolist() if hasattr(rs_adapter, 'K_rs_c') else None
-                    }
-                    transform_path = os.path.join(metadata_dir, "realsense_transform.json")
-                    with open(transform_path, 'w') as f:
-                        json.dump(transform_data, f, indent=2)
-                    print(f"[INFO] Saved RealSense transformation to {transform_path}")
-
-                    # Capture current RealSense pose
-                    rs_data = rs_adapter.capture_and_align()
-                    if rs_data:
-                        rs_pose_path = os.path.join(metadata_dir, "realsense_pose.json")
-                        # Convert numpy arrays to lists for JSON serialization
-                        rs_data_serializable = {
-                            k: v.tolist() if isinstance(v, np.ndarray) else v
-                            for k, v in rs_data.items()
-                            if k not in ['color', 'aligned_depth', 'aligned_disparity']  # Skip image data
-                        }
-                        with open(rs_pose_path, 'w') as f:
-                            json.dump(rs_data_serializable, f, indent=2)
-                        print(f"[INFO] Saved RealSense pose to {rs_pose_path}")
-            except Exception as e:
-                print(f"[WARNING] Could not save RealSense data: {e}")
-
-            messagebox.showinfo("Save Complete", f"Frame data saved to:\n{frame_dir}")
-
-        except Exception as e:
-            print(f"[ERROR] save_frame_data: {e}")
-            import traceback
-            traceback.print_exc()
-            messagebox.showerror("Save Error", f"Failed to save frame data: {e}")
 
     def on_close(self):
         """Handle window close"""
