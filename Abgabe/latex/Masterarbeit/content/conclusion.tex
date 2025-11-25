@@ -1,0 +1,46 @@
+\section{Conclusion}
+
+This thesis presented the design, implementation, and initial evaluation of a mixed reality application for six-degree-of-freedom (6D) object pose estimation on the Apple Vision Pro. The system combines a native \texttt{visionOS} client, a Python-based main API, and a FoundationPose-based pose estimation backend into a modular architecture that exposes clear interfaces between sensing, vision, and visualization components. The application enables users to place and configure multiple windows in space, define a region of interest (ROI) via gaze and hand interaction, and visualize 6D pose estimates as an overlay in the headset.
+
+A central design constraint throughout the work was the limitation to the standard Apple Developer Program (ADP). Direct access to raw camera and depth streams, as well as low-level IMU data, is restricted outside the Apple Developer Enterprise Program (ADEP). As a result, the final system relies on AirPlay mirroring as a workaround for image acquisition and uses ARKit’s higher-level head pose estimates rather than raw sensor data. These restrictions heavily influenced the architecture: frame capture and mask extraction were moved to the external main API, and the headset primarily serves as an interactive front-end that streams its pose and requests pose overlays.
+
+The development process followed a staged approach. First, a non-AR prototype was implemented in Python and web technologies to test ROI concepts, color-based mask extraction, depth estimation via monocular transformers and RealSense, and integration with both a mock pose API and the collaborator’s FoundationPose-based service. This environment allowed rapid iteration on the computer vision pipeline and the definition of the main API endpoints.  
+
+Building on this, the \texttt{visionOS} client was implemented as a native Apple Vision Pro application. The client integrates ARKit for head pose tracking, RealityKit for spatial rendering, and SwiftUI for UI components such as the main control window, ROI configuration window, and debug panel. The client communicates with the main API using a documented set of REST endpoints, streams headset pose, and receives SE(3) transformations which are converted into RealityKit coordinates and rendered as a simplified arrow overlay. The decision to use an arrow instead of full CAD meshes on the headset side reduced complexity and made performance bottlenecks easier to isolate.
+
+The evaluation focused on three aspects: system performance, user interaction, and pose feedback quality. Tests in the Xcode simulator confirmed the correctness of the API wiring and the stability of the polling loop. Real-device tests on the Apple Vision Pro with a Mac~Mini box, banana, and spanner showed that the system can provide interactive pose feedback under realistic conditions. At the same time, they exposed clear limitations: end-to-end latency in the hundreds of milliseconds, sensitivity of the ROI mask to AirPlay artefacts and clutter, and visible pose jitter under motion. Simulation experiments with Extended Kalman Filters, Particle Filters, and Gaussian Process–based, data-driven models (cf.\ Appendix~\ref{appendix:willems}) indicated that temporal filtering can mitigate some of these issues, but these methods have not yet been deployed in the live pipeline.
+
+In summary, the results show that a modern mixed reality headset can act as an effective front-end for an external, AI-based 6D pose estimation pipeline, even under restricted sensor access. The prototype demonstrates that pose feedback can be brought into the user’s field of view and coupled with natural interaction, forming a practical building block for future AR-supported Programming by Demonstration (PbD) workflows.
+
+\subsection{Outlook}
+
+Several directions for future work follow directly from the current architecture and its limitations:
+
+\begin{itemize}
+    \item \textbf{Platform access and depth sensing:}  
+    The reliance on AirPlay is a direct consequence of ADP-level permissions. Access to raw camera streams and hardware depth (e.g.\ via ADEP or future VisionOS APIs) would allow the vision pipeline to run closer to the sensor, remove the need for screen capture, and enable more robust ROI masks that do not interfere with the RGB feed. Native stereo or depth data would also simplify the current depth estimation and alignment strategies.
+
+    \item \textbf{Latency reduction and temporal filtering:}  
+    Lowering end-to-end latency requires optimization of the main API and pose backend, but also better use of temporal models. The EKF, Particle Filter, and GP-based data-driven models studied in simulation (Appendix~\ref{appendix:willems}) should be integrated into the backend as a dedicated filtering stage between FoundationPose and the \texttt{/avp\_pose} endpoint. These filters operate only on sequences of past poses and headset motion, so they can be added transparently without changing the client interface.
+
+    \item \textbf{Occlusion handling and multi-camera setups:}  
+    The current system does not explicitly handle occlusion; pose degradation under self-occlusion or clutter is handled implicitly by FoundationPose and the color-based ROI mask. Future work should explore multi-camera setups (e.g.\ RealSense plus AVP), 3D reconstruction from external cameras, or learned occlusion-aware models. With calibrated extrinsics, depth and pose from an external camera could be transformed into the AVP frame and overlaid consistently.
+
+    \item \textbf{Extended usability studies and interaction refinements:}  
+    The interaction concepts—multi-window layout, ROI radius slider, and color-based mask control—were tested only with a small group of internal users. Larger, structured user studies are needed to evaluate learnability, fatigue, and error patterns over longer sessions. Concrete improvements include a snapshot mode that decouples ROI definition from continuous streaming, clearer feedback when a new pose request is in flight, and refined gaze and gesture thresholds.
+
+    \item \textbf{Integration with robotics and PbD workflows:}  
+    Connecting the backend to an actual robot controller is a natural next step. Estimated object poses could be used to define grasp points, approach directions, or task frames for Programming by Demonstration. This would enable direct comparison with existing PbD systems and help identify which interaction patterns on the headset side best support non-expert users during robot teaching.
+
+    \item \textbf{On-device and hybrid inference:}  
+    Investigating lightweight 6D pose estimators on the Apple Vision Pro could reduce dependency on network connectivity and external GPUs. A hybrid setup, where a compact model provides fast on-device pose proposals which are occasionally refined by a server-side FoundationPose instance, would trade off latency and accuracy in a controlled way.
+
+    \item \textbf{Multi-modal interaction:}  
+    Finally, adding alternative input channels—such as voice commands, simple physical controllers, or wearable devices—could complement gaze and hand gestures. This may help reduce cognitive load and improve accessibility, especially in scenarios where users need to interact with both the headset and physical objects or robots.
+\end{itemize}
+
+Overall, the work confirms that combining AR interfaces with external, AI-based pose estimation is technically feasible under current platform constraints and provides a concrete starting point for more advanced systems at the intersection of spatial computing, machine perception, and human-centered robot programming.
+
+
+
+%TODO mention IMU data use or RL approach with reward signal from error compared to known pose/multicamera..

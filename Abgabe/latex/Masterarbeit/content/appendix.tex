@@ -1,0 +1,353 @@
+\appendix
+
+\section{Additional Background}
+\label{sec:appendix-additional-background}
+
+This section provides additional mathematical and algorithmic background that supports the methods used in the main chapters. It covers an enhanced Iterative Closest Point (ICP) algorithm for 6D pose tracking, classical stereo vision for intrinsics and depth estimation, the ZoeDepth monocular depth estimation approach, and the stochastic state estimation methods considered for pose smoothing and occlusion handling.
+
+\subsection{ICP Enhancement Algorithm for 6D Pose Tracking}
+\label{appendix:icp}
+
+In their work, Hwang et al.\ propose an enhancement of the Iterative Closest Point (ICP) algorithm for robust 6D pose tracking of household objects \cite{hwang2025icp}. The method requires only 3D object models and does not rely on any offline training. It consists of three main stages: coarse registration, refinement, and validation with recovery.
+
+\textbf{Coarse registration} \\
+The algorithm begins with coarse registration using RGB keypoints extracted by a Kanade–Lucas–Tomasi (KLT) tracker and depth information. Corresponding 3D keypoints are defined for the previous frame $K_{i-f}$ and the current frame $K_i$. The centroids are computed as in Eq.~(1):
+\[
+\bar{k}_{i-f} = \frac{1}{N}\sum_{j=1}^N k^j_{i-f}, \quad 
+\bar{k}_i = \frac{1}{N}\sum_{j=1}^N k^j_i
+\]
+and the covariance matrix $C$ is formed as in Eq.~(2):
+\[
+C = \sum_{j=1}^N (k^j_{i-f} - \bar{k}_{i-f})(k^j_i - \bar{k}_i)^T.
+\]
+Using singular value decomposition (Eq.~(3)) yields the optimal rotation (Eq.~(4)) and translation (Eq.~(5)):
+\[
+[U,S,V] = \mathrm{SVD}(C), \quad 
+\hat{R}_{i-f,i} = VU^T, \quad
+\hat{t}_{i-f,i} = \bar{k}_i - \hat{R}_{i-f,i}\bar{k}_{i-f}.
+\]
+The relative transformation between frames is then expressed as in Eq.~(6)–(7):
+\[
+\hat{T}_{i-f,i} =
+\begin{bmatrix}
+\hat{R}_{i-f,i} & \hat{t}_{i-f,i} \\ 0 & 1
+\end{bmatrix}, 
+\quad \hat{T}_i = T_{i-f}\hat{T}_{i-f,i}.
+\]
+
+\textbf{Pose correction with covariance} \\
+To reduce drift from inaccurately tracked keypoints, Hwang et al.\ apply periodic correction using covariance-weighted fusion of poses. Small rotations are approximated in first order as in Eq.~(8), and the covariance of pose estimates is derived from the registration cost function (Eq.~(9)–(10)):
+\[
+J = \sum_{j=1}^N \|\hat{T}_{i-f,i}k^j_{i-f} - k^j_i\|^2.
+\]
+The correction step fuses poses from different frame intervals to obtain a more stable estimate.
+
+\textbf{Refinement} \\
+The coarse alignment is refined using a modified point-to-plane ICP formulation. The standard objective (Eq.~(17)) is
+\[
+\hat{T}_{i,\mathrm{po2pl}} = \arg\min_T \sum_{j=1}^M \|(T o_j - p^j_i)\cdot n^j_i\|^2,
+\]
+which can be linearized into the least-squares form (Eq.~(18)–(21)):
+\[
+\hat{x}_{i,\mathrm{po2pl}} = \arg\min_x \|Ax - b\|^2.
+\]
+To handle flat and rotationally symmetric objects, the authors introduce a weighted refinement formulation (Eq.~(22)–(23)):
+\[
+\hat{x}_{i,\mathrm{refin}} = \arg\min_x \|AWx - b\|^2 + \|(I-W)x\|^2,
+\]
+\[
+\hat{x}_{i,\mathrm{refin}} = (W^TA^TAW + (I-W)^T(I-W))^{-1}W^TA^Tb,
+\]
+where $W$ is a weight matrix adjusting the contribution of ICP terms based on object geometry and KLT confidence. The final pose is updated as in Eq.~(24):
+\[
+T_i = \hat{T}_i \hat{T}_{i,\mathrm{refin}}.
+\]
+
+\textbf{Validation and recovery} \\
+Finally, the algorithm introduces a validation step to detect tracking failures, which classical ICP cannot recognize. ORB descriptors and keypoints are periodically stored and compared against current observations. If thresholds on rotation, translation, or descriptor similarity are violated, the recovery process (Algorithm~3 in \cite{hwang2025icp}) reinitializes the pose from the stored dictionary.
+
+\textbf{Summary} \\
+By combining keypoint-based coarse registration, covariance-based correction, adaptive ICP refinement, and ORB-based validation, the algorithm achieves robust 6D pose tracking of household objects without requiring training data. Hwang et al.\ report performance comparable to state-of-the-art learning-based approaches while running at approximately 71~frames per second (FPS) on CPU alone \cite{hwang2025icp}.
+
+\subsection{Classical Stereo Vision for Intrinsics and Depth}
+\label{appendix:stereo}
+
+Stereo vision is a well-established method for estimating camera intrinsics and scene depth. The method relies on capturing two images from slightly displaced viewpoints (left and right cameras), and then using geometric constraints to compute disparity, which can be converted into depth.
+
+\textbf{Epipolar geometry} \\
+The relationship between two stereo images can be described by epipolar geometry. Given a 3D point $\mathbf{X}$ projected into two camera frames, its pixel coordinates $\mathbf{x}_l$ and $\mathbf{x}_r$ are constrained to lie along corresponding epipolar lines. This constraint is expressed via the fundamental matrix $F$:
+\[
+\mathbf{x}_r^\top F \,\mathbf{x}_l = 0,
+\]
+where $\mathbf{x}_l$ and $\mathbf{x}_r$ are homogeneous coordinates of the same 3D point in the left and right images.
+
+The essential matrix $E$ refines this relationship when camera intrinsics $K$ are known:
+\[
+E = K^\top F K, \quad
+\mathbf{x}_r^\top E \,\mathbf{x}_l = 0.
+\]
+
+\begin{figure}[ht]
+    \centering
+    \fbox{\parbox{0.9\linewidth}{Epipolar geometry diagram placeholder}}
+    \caption[Epipolar geometry in stereo vision]{Illustration of epipolar geometry in a stereo vision system.}
+    \label{fig:epipolar}
+\end{figure}
+
+\textbf{Disparity and depth} \\
+For rectified stereo pairs, corresponding points lie on the same image row. If $u_l$ and $u_r$ are the horizontal pixel coordinates of a matched point in the left and right image, respectively, the disparity $d$ is
+\[
+d = u_l - u_r.
+\]
+
+The depth $Z$ of the corresponding 3D point is then given by
+\[
+Z = \frac{f \cdot B}{d},
+\]
+where $f$ is the focal length of the camera (in pixels), $B$ is the baseline distance between the two cameras, and $d$ is the disparity.
+
+\textbf{Limitations in this work} \\
+During prototyping, this classical stereo pipeline was tested as a baseline. However, in the absence of carefully tuned feature extraction and robust disparity matching, the results lacked sufficient precision for reliable pose estimation. As a result, stereo-based disparity was replaced by monocular depth estimation in the main pipeline. A more detailed derivation of epipolar constraints and stereo triangulation can be found in standard references such as Hartley and Zisserman \cite{ref:hartleyzisserman} and other stereo vision textbooks \cite{ref:stereo}.
+
+\subsection{ZoeDepth: Metric and Relative Depth Estimation}
+\label{appendix:zoedepth}
+
+The monocular depth estimation (MDE) transformer used in this work builds on the approach of ZoeDepth \cite{bhat2023zoedepth}. ZoeDepth introduces a unified framework that combines the strengths of relative depth estimation (RDE) and metric depth estimation (MDE).
+
+\textbf{Relative vs.\ metric depth} \\
+\begin{itemize}
+    \item \textbf{Relative depth estimation (RDE):} predicts depth maps where relative differences are consistent, but global scale is undefined. This enables training across diverse datasets without needing consistent metric calibration.
+    \item \textbf{Metric depth estimation (MDE):} outputs depth values in absolute units (e.g., meters), making it useful for robotics and AR tasks but prone to overfitting to specific datasets.
+\end{itemize}
+
+ZoeDepth leverages both: it first pre-trains on diverse datasets for relative depth, and then fine-tunes using metric annotations for scale alignment.
+
+\textbf{Metric bins module} \\
+A key innovation is the metric bins module, which reformulates per-pixel depth prediction as a weighted combination of discretized depth bin centers:
+\[
+d(i) = \sum_{k=1}^{N} p_i(k)\,c_k,
+\]
+where $d(i)$ is the depth at pixel $i$, $c_k$ are the bin centers, and $p_i(k)$ are soft probabilities predicted by the network. Instead of relying on a standard softmax, ZoeDepth introduces an ordinal-aware probability distribution (log-binomial) to better reflect the ordered nature of depth bins.
+
+\textbf{Generalization and zero-shot transfer} \\
+By pre-training on 12 datasets with relative depth and fine-tuning on both indoor and outdoor metric datasets, ZoeDepth achieves:
+\begin{itemize}
+    \item state-of-the-art performance on benchmark datasets such as NYU Depth~v2 and KITTI,
+    \item strong zero-shot transfer to unseen datasets across indoor, outdoor, synthetic, and real domains \cite{bhat2023zoedepth}.
+\end{itemize}
+
+\begin{figure}[ht]
+    \centering
+    \fbox{\parbox{0.9\linewidth}{ZoeDepth architecture figure placeholder}}
+    \caption[ZoeDepth architecture overview]{Overview of the ZoeDepth architecture combining relative and metric depth estimation \cite{bhat2023zoedepth}.}
+    \label{fig:zoedepth}
+\end{figure}
+
+\textbf{Relevance to this work} \\
+In this project, ZoeDepth’s transformer-based MDE was integrated (via HuggingFace~Transformers \cite{transformers-model}) to replace stereo disparity estimation. This provided more reliable depth maps aligned with RGB snapshots, making downstream ROI-masked pose estimation feasible.
+
+\subsection{Stochastic State Estimation and Occlusion Handling}
+\label{appendix:willems}
+
+To reduce pose jitter and partially compensate for occlusion and head-motion effects, several stochastic state estimation approaches were investigated in simulation: Extended Kalman Filtering (EKF), Particle Filtering (PF), and data-driven prediction based on Willems’ Fundamental Lemma combined with Gaussian Processes (GPs). All methods operate purely on historical pose estimates and headset motion; user inputs such as gestures do not enter the mathematical formulation.
+
+\subsubsection*{Problem formulation}
+
+Let $k \in \mathbb{N}$ index discrete time steps corresponding to pose updates. The state vector is chosen as
+\[
+x_k =
+\begin{bmatrix}
+p_k \\
+\varphi_k \\
+h_k
+\end{bmatrix},
+\]
+where $p_k \in \mathbb{R}^3$ is the object position in the AVP camera frame, $\varphi_k \in \mathbb{R}^3$ is a minimal orientation representation (e.g.\ axis–angle or yaw–pitch–roll), and $h_k \in \mathbb{R}^6$ encodes the headset pose (position and orientation parameters) provided by ARKit.
+
+The raw pose estimate from the pipeline (FoundationPose plus projection into the AVP frame) is denoted by
+\[
+y_k =
+\begin{bmatrix}
+\tilde{p}_k \\
+\tilde{\varphi}_k
+\end{bmatrix},
+\]
+with $\tilde{p}_k, \tilde{\varphi}_k$ obtained from the $4 \times 4$ SE(3) matrix returned by the backend. A simple discrete-time process model is
+\[
+x_k = f(x_{k-1}) + w_k,
+\quad
+y_k = h(x_k) + v_k,
+\]
+where $w_k$ and $v_k$ are zero-mean process and measurement noise, respectively. In the simplest case, $f$ propagates the object state with a constant-velocity assumption in object coordinates while updating $h_k$ directly from the headset stream, and $h$ extracts $(p_k,\varphi_k)$ from $x_k$.
+
+A scalar trust factor $\tau_k \in [0,1]$ is used to encode the reliability of the measurement at time $k$. It combines heuristics such as:
+\begin{itemize}
+    \item the consistency of consecutive pose estimates,
+    \item magnitude of apparent jumps in orientation or position,
+    \item the magnitude of head motion between $k-1$ and $k$,
+    \item optional occlusion cues from the mask or depth map.
+\end{itemize}
+Low trust ($\tau_k \approx 0$) indicates suspected occlusion or degraded pose quality.
+
+\subsubsection*{Extended Kalman Filter}
+
+The EKF linearizes the nonlinear system around the current estimate. Prediction:
+\[
+\hat{x}_{k|k-1} = f(\hat{x}_{k-1|k-1}), \quad
+P_{k|k-1} = F_k P_{k-1|k-1} F_k^\top + Q_k,
+\]
+where $F_k = \left.\frac{\partial f}{\partial x}\right|_{\hat{x}_{k-1|k-1}}$ is the Jacobian of $f$ and $Q_k$ is the process noise covariance.
+
+Update:
+\[
+\hat{y}_{k|k-1} = h(\hat{x}_{k|k-1}), \quad
+H_k = \left.\frac{\partial h}{\partial x}\right|_{\hat{x}_{k|k-1}},
+\]
+\[
+S_k = H_k P_{k|k-1} H_k^\top + R_k(\tau_k),
+\quad
+K_k = P_{k|k-1} H_k^\top S_k^{-1},
+\]
+\[
+\hat{x}_{k|k} = \hat{x}_{k|k-1} + K_k (y_k - \hat{y}_{k|k-1}), \quad
+P_{k|k} = (I - K_k H_k) P_{k|k-1}.
+\]
+
+The trust factor enters via the measurement noise covariance $R_k(\tau_k)$, for example:
+\[
+R_k(\tau_k) = \frac{1}{\max(\tau_k,\varepsilon)} R_0,
+\]
+with a small $\varepsilon > 0$. When $\tau_k$ is small (low trust), $R_k$ grows and the filter relies more strongly on its prediction; when $\tau_k$ is close to $1$, new measurements dominate.
+
+\subsubsection*{Particle Filter}
+
+The PF approximates the posterior $p(x_k \mid y_{1:k})$ by a weighted set of particles $\{x_k^{(i)}, w_k^{(i)}\}_{i=1}^N$.
+
+Prediction:
+\[
+x_k^{(i)} \sim p(x_k \mid x_{k-1}^{(i)}),
+\]
+typically by sampling from $f(x_{k-1}^{(i)})$ plus process noise.
+
+Update:
+\[
+w_k^{(i)} \propto w_{k-1}^{(i)} \cdot \ell\bigl(y_k \mid x_k^{(i)}, \tau_k\bigr),
+\]
+where the likelihood $\ell$ is often Gaussian:
+\[
+\ell\bigl(y_k \mid x_k^{(i)}, \tau_k\bigr)
+\propto
+\exp\!\left(
+-\frac{1}{2}\, \bigl(y_k - h(x_k^{(i)})\bigr)^\top R_k(\tau_k)^{-1} \bigl(y_k - h(x_k^{(i)})\bigr)
+\right).
+\]
+Again, $R_k(\tau_k)$ is scaled by the trust factor to down-weight unreliable measurements. After normalization of $\{w_k^{(i)}\}$, resampling is performed if the effective sample size drops below a threshold.
+
+PFs are attractive when $f$ and $h$ are significantly nonlinear (e.g.\ orientation represented on $\mathrm{SO}(3)$) or when the noise is non-Gaussian, but they are more computationally demanding than EKFs.
+
+\subsubsection*{Data-driven prediction via Willems’ Fundamental Lemma}
+
+In addition to model-based estimators, a data-driven predictor was explored based on Willems’ Fundamental Lemma. The core idea is to represent the closed-loop behaviour of a linear time-invariant (LTI) system directly from measured trajectories, without identifying an explicit state-space model.
+
+For a given pose component (e.g.\ one coordinate of $p_k$), define:
+\begin{itemize}
+    \item pseudo-input $u_k$ as the relative headset motion between $k-1$ and $k$ (e.g.\ translation and small orientation changes extracted from $h_k$),
+    \item output $y_k$ as the corresponding raw pose component from the backend.
+\end{itemize}
+
+From a long “training” sequence $\{u_k, y_k\}_{k=0}^{T-1}$ collected during operation, block Hankel matrices are built:
+\[
+H_L(u) =
+\begin{bmatrix}
+u_0 & u_1 & \dots & u_{T-L} \\
+u_1 & u_2 & \dots & u_{T-L+1} \\
+\vdots & \vdots & \ddots & \vdots \\
+u_{L-1} & u_L & \dots & u_{T-1}
+\end{bmatrix},
+\quad
+H_L(y) =
+\begin{bmatrix}
+y_0 & y_1 & \dots & y_{T-L} \\
+\vdots & \vdots & \ddots & \vdots \\
+y_{L-1} & y_L & \dots & y_{T-1}
+\end{bmatrix}.
+\]
+
+Under a persistence-of-excitation condition on $u_k$, Willems’ lemma states that any trajectory of the underlying LTI system can be expressed as a linear combination of the columns of these Hankel matrices. For prediction, one solves a least-squares problem:
+\[
+\begin{bmatrix}
+H_L(u) \\
+H_L(y)
+\end{bmatrix} g
+=
+\begin{bmatrix}
+\bar{u} \\
+\bar{y}
+\end{bmatrix},
+\]
+where $(\bar{u},\bar{y})$ encodes the most recent input–output window. The coefficient vector $g$ is then used to generate a one-step-ahead prediction
+\[
+\hat{y}_{k+1} = H_1(y) g,
+\]
+corresponding to the next pose component. This prediction acts as a purely data-driven forecast that can be blended with EKF or PF estimates, or used as a baseline model in a GP (see below).
+
+In this project, the emphasis is on the requirement that the input sequence (here: headset motion) must be sufficiently “exciting”, which motivates deliberate head movements during calibration sequences to ensure informative data.
+
+\subsubsection*{Gaussian Process post-filtering}
+
+Gaussian Processes are used to model the residual error between the raw pose estimate and a baseline predictor (e.g.\ a constant-velocity model or the data-driven Willems-based predictor). For each pose component, define the residual
+\[
+e_k = y_k - \hat{y}_k^{\text{baseline}},
+\]
+and an input feature vector
+\[
+z_k =
+\begin{bmatrix}
+y_{k-1} \\
+y_k \\
+h_k
+\end{bmatrix},
+\]
+stacking recent pose measurements and the current headset pose. A GP regression model
+\[
+e_k = g(z_k) + \epsilon_k,
+\quad \epsilon_k \sim \mathcal{N}(0,\sigma_n^2)
+\]
+is trained on logged data. At runtime, the GP predicts a correction term $\hat{e}_k$ and uncertainty $\sigma_k^2$ for each new $z_k$, leading to a corrected pose
+\[
+\hat{y}_k^{\text{corr}} = \hat{y}_k^{\text{baseline}} + \hat{e}_k.
+\]
+
+When the predicted uncertainty $\sigma_k^2$ is large, the correction can be down-weighted; conversely, small $\sigma_k^2$ indicates that the GP has seen similar situations before and can apply a more confident correction. This is particularly useful around occlusion events or rapid head motion, where systematic biases in the raw pose estimates can be learned.
+
+\textbf{Summary} \\
+The EKF and PF provide principled state estimators that can incorporate a time-varying trust factor and headset motion. The data-driven approach based on Willems’ lemma and the GP-based residual model offer complementary, model-free ways to exploit historical data. In the thesis, these methods are evaluated in simulation using logged AVP/headset trajectories and pose sequences; their integration into the live backend is left as future work, as discussed in the conclusion.
+
+\section{Prototype Modules}
+\label{appendix:prototype-modules}
+
+This section summarizes additional implementation details of the non-AR prototype modules that were used during early development to validate interaction concepts and the pose estimation pipeline.
+
+The Python-based prototype, described in Section~\ref{sec:systemdesign}, comprises:
+\begin{itemize}
+    \item a model selection component for loading and preprocessing 3D meshes,
+    \item an intrinsics and ROI selection interface (including circular ROI drawing and preview),
+    \item a depth estimation integration based on ZoeDepth,
+    \item a mock pose API for decoupled testing of the client logic,
+    \item a queue-based concurrency design for snapshot, masking, and pose handling.
+\end{itemize}
+
+These modules were instrumental in debugging the backend integration, testing ROI-based workflows, and exploring different depth estimation strategies before porting the core concepts to the \texttt{visionOS} client. They also served as a convenient environment to record pose and headset trajectories for the stochastic filters described in Appendix~\ref{appendix:willems}.
+
+\section{Evaluation Figures}
+\label{appendix:evaluationfigures}
+
+This section contains the detailed figures, charts, and screenshots accompanying the evaluation framework introduced in Chapter~\ref{sec:evaluation}. It includes:
+\begin{itemize}
+    \item visualizations of the three test setups (simulator-based tests and real-device tests with the Mac~Mini box, banana, and spanner),
+    \item plots of frame rate and end-to-end latency over time for different backend configurations,
+    \item aggregated user questionnaire results on usability and interaction quality,
+    \item qualitative examples of pose overlays under static, moderate-motion, and stress-motion conditions.
+\end{itemize}
+
+These figures provide visual context for the qualitative findings reported in the Evaluation chapter and can be used as a reference when comparing future iterations of the system against the current prototype.
