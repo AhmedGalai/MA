@@ -1,0 +1,319 @@
+\section{Development}
+\label{sec:development}
+
+This chapter describes the technical development of the native \texttt{visionOS} application on Apple Vision Pro and its integration with the Python-based backend from Section~\ref{sec:systemdesign}. The goal was to transition from a desktop prototype to a lightweight, immersive mixed-reality client that operates under the constraints of the standard Apple Developer Program (ADP), i.e.\ without ADEP-level access to raw camera and IMU data.
+
+The implementation focuses on the aspects summarized in Table~\ref{tab:dev-focus}.
+
+\begin{table}[H]
+    \centering
+    \caption{Development focus of the VisionOS client}
+    \label{tab:dev-focus}
+    \begin{tabular}{p{0.28\linewidth}p{0.62\linewidth}}
+        \toprule
+        \textbf{Aspect} & \textbf{Description} \\
+        \midrule
+        Modular VisionOS client &
+        ROI control, model selection, and pose visualization in a thin front-end. \\
+        Robust communication layer &
+        Stable HTTP-based integration with the main API and pose backend. \\
+        AirPlay-based capture pipeline &
+        Development-time RGB acquisition to compensate for missing camera entitlements. \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsection{Development Environment}
+
+\subsubsection{Hardware and Software Setup}
+
+Development was performed on a Mac~Mini (M2, 8-core CPU, 10-core GPU, 16~GB RAM) \cite{apple_macmini_specs}, with an Apple Vision Pro headset used for deployment and in-situ testing. Xcode~15 and the latest \texttt{visionOS SDK} served as the primary development environment.  
+
+\texttt{SwiftUI} is used for window and control layout, \texttt{RealityKit} for 3D rendering and anchors, and \texttt{ARKit} for world tracking and headset pose estimation. All project sources are organized in a single Xcode workspace under \texttt{PoseOverlayApp}.
+
+\subsubsection{Project Setup and Entitlements}
+
+The VisionOS client was created from the standard “\texttt{visionOS App}” template in Xcode and configured with provisioning profiles for deployment to the Apple Vision Pro. Under ADP, entitlements are limited compared to ADEP; in particular, there is no access to:
+
+\begin{itemize}
+    \item raw camera frames or textures,
+    \item raw depth streams,
+    \item low-level IMU readings.
+\end{itemize}
+
+Consequently, the application relies on the mechanisms in Table~\ref{tab:entitlements-dev}.
+
+\begin{table}[H]
+    \centering
+    \caption{Runtime capabilities used under ADP}
+    \label{tab:entitlements-dev}
+    \begin{tabular}{p{0.28\linewidth}p{0.62\linewidth}}
+        \toprule
+        \textbf{Capability} & \textbf{Usage} \\
+        \midrule
+        ARKit world tracking &
+        Headset pose estimation via anchors; no raw IMU exposed. \\
+        System-managed background &
+        Scene background rendering without direct camera texture access. \\
+        Networking APIs &
+        HTTP communication with the Python main API. \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+The following usage descriptions were added to \texttt{Info.plist}:
+
+\begin{itemize}
+    \item \texttt{NSLocalNetworkUsageDescription} – required to connect to the main API on the local network,
+    \item \texttt{NSMotionUsageDescription} – required for ARKit world tracking.
+\end{itemize}
+
+Requests for additional camera- and sensor-related entitlements beyond ADP were not granted. This motivated the AirPlay-based RGB acquisition described in Section~\ref{subsec:airplay-dev}. Apple’s privacy and platform policies enforce these restrictions to protect access to sensitive sensor data \cite{apple_entitlements}.
+
+\subsection{From Prototype to AR Application}
+
+The Python desktop prototype (Section~\ref{subsec:python-prototype}) provided a reference implementation of intrinsics estimation, ROI handling, depth estimation, and pose API integration. The VisionOS client was derived in three steps:
+
+\begin{enumerate}
+    \item \textbf{Mock API integration} – A local \texttt{mock\_api} server emulated the behavior of the real pose backend (intrinsics, depth, and random but valid SE(3) poses). The VisionOS app was first wired against this server to test networking, JSON encoding, and UI flows without the full CV stack.
+    \item \textbf{Switch to the main API} – The client was reconfigured to call the main API (Section~\ref{subsec:backend-api}) instead of the mock server. Endpoints such as \texttt{/models}, \texttt{/config}, \texttt{/head\_pose}, and \texttt{/avp\_pose} were integrated one by one.
+    \item \textbf{Connection to the FoundationPose backend} – Once the main API successfully proxied requests to the FoundationPose-based pose API~\cite{matchcow_pose_api}, the VisionOS app began receiving realistic pose estimates. From the client’s perspective, only the semantics of \texttt{/avp\_pose} changed from “mock” to “real”.
+\end{enumerate}
+
+The final architecture keeps the VisionOS client thin: intrinsics, depth, and pose inference are computed exclusively on the backend. The ROI-based workflow from the Python prototype is preserved, but all pixel-level operations now happen in the computer vision pipeline; the AVP only transmits high-level parameters.
+
+\subsection{User Interface and AVP Components}
+
+The VisionOS client is structured into three floating windows and one immersive space. Their responsibilities are summarized in Table~\ref{tab:avp-ui-components-dev}.
+
+\begin{table}[H]
+    \centering
+    \caption{VisionOS UI components}
+    \label{tab:avp-ui-components-dev}
+    \begin{tabular}{p{0.25\linewidth}p{0.63\linewidth}}
+        \toprule
+        \textbf{Component} & \textbf{Role} \\
+        \midrule
+        Main window &
+        Network configuration and model selection. \\
+        ROI window &
+        Region-of-interest controls (radius, color filter, enable/disable). \\
+        Debug window &
+        Live diagnostics, logs, and last pose information. \\
+        Immersive view &
+        3D pose overlay and headset pose visualization. \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+All windows can be repositioned in space, allowing comfortable layouts during testing.
+
+\subsubsection{Main Window}
+
+The main window aggregates global settings that affect backend behavior. Its controls and effects are listed in Table~\ref{tab:main-window-controls}.
+
+\begin{table}[H]
+    \centering
+    \caption{Main window controls}
+    \label{tab:main-window-controls}
+    \begin{tabular}{p{0.27\linewidth}p{0.61\linewidth}}
+        \toprule
+        \textbf{Control} & \textbf{Function} \\
+        \midrule
+        API host and port &
+        Text field for main API base URL (e.g.\ \texttt{http://192.168.0.10:5000}); changes trigger \texttt{GET /health}. \\
+        Model selection &
+        Picker populated via \texttt{GET /models}; on change, sends \texttt{POST /select\_model}. \\
+        Depth mode &
+        Segmented control for depth strategy (\texttt{"mde"}, \texttt{"realsense"}, \texttt{"none"}); sent as \texttt{"depth\_mode"} in \texttt{/avp\_pose}. \\
+        Pose polling toggle &
+        Starts/stops a background task that periodically calls \texttt{/avp\_pose} and updates the overlay. \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsubsection{ROI Window}
+
+The ROI window exposes the parameters required to construct the ROI mask in the backend. Table~\ref{tab:roi-window-controls-dev} summarizes the controls and their mapping to the \texttt{/avp\_pose} payload.
+
+\begin{table}[H]
+    \centering
+    \caption{ROI window controls}
+    \label{tab:roi-window-controls-dev}
+    \begin{tabular}{p{0.27\linewidth}p{0.61\linewidth}}
+        \toprule
+        \textbf{Control} & \textbf{Backend usage} \\
+        \midrule
+        Radius slider &
+        Adjusts ROI radius in pixel units; sent as \texttt{"radius\_px"} inside \texttt{"roi\_circle"}. \\
+        Gaze-anchored center &
+        Uses current gaze direction to compute \texttt{"center\_px"} in the AirPlay image. \\
+        Color picker &
+        Chosen RGB converted to HSV bounds (\texttt{h\_min}, \dots, \texttt{v\_max}); controls color-based outline detection. \\
+        Enable/disable switch &
+        Toggles ROI masking; when off, backend may fall back to a full-frame mask. \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+The ROI circle drawn in the immersive view uses a thin outline and low opacity to avoid degrading the RGB content mirrored via AirPlay and consumed by the pose pipeline.
+
+\subsubsection{Debug Window}
+
+The debug window implements a scrollable log pane. Its content is driven by a \texttt{LogStore} class that collects timestamped messages and exposes them via a \texttt{@Published} list. Typical entries include:
+
+\begin{itemize}
+    \item last request and response times for \texttt{/avp\_pose},
+    \item the most recent pose matrix (displayed as a 4$\times$4 table),
+    \item active depth mode and model name,
+    \item error messages with HTTP status codes and decoding failures.
+\end{itemize}
+
+This panel was crucial for tuning polling intervals and diagnosing failures during AirPlay experiments.
+
+\subsubsection{Immersive View and Pose Overlay}
+
+The immersive view hosts the RealityKit content. Its scene graph contains:
+
+\begin{itemize}
+    \item a head anchor (\texttt{AnchorEntity(.head)}) for headset pose tracking,
+    \item a pose overlay root entity placed at a fixed offset in front of the user,
+    \item a pose arrow entity representing the estimated object pose,
+    \item an optional head-axes entity for visualizing current headset orientation.
+\end{itemize}
+
+For the proof of concept, a simple arrow model is used instead of a full CAD mesh. On each new pose:
+
+\begin{enumerate}
+    \item the returned $4\times 4$ OpenCV-style matrix is converted to \texttt{simd\_float4x4},
+    \item a conversion matrix flips Y and Z to match RealityKit conventions (Section~\ref{subsec:cv-pipeline-design}),
+    \item the resulting transform is assigned to the arrow entity.
+\end{enumerate}
+
+This makes translational and rotational errors easy to spot while keeping rendering overhead low.
+
+\subsection{Communication with the Main API}
+
+Networking uses \texttt{URLSession} and Swift’s \texttt{async/await}. Table~\ref{tab:api-use-client} summarizes the endpoints used by the VisionOS client.
+
+\begin{table}[H]
+    \centering
+    \caption{Main API usage from VisionOS client}
+    \label{tab:api-use-client}
+    \begin{tabular}{p{0.24\linewidth}p{0.11\linewidth}p{0.55\linewidth}}
+        \toprule
+        \textbf{Endpoint} & \textbf{Method} & \textbf{Purpose} \\
+        \midrule
+        \texttt{/health} & GET &
+        Check connectivity when the base URL changes or on startup. \\
+        \texttt{/models} & GET &
+        Populate CAD model picker. \\
+        \texttt{/select\_model} & POST &
+        Set active model for subsequent pose requests. \\
+        \texttt{/head\_pose} & POST &
+        Stream headset pose (position, quaternion, timestamp). \\
+        \texttt{/avp\_pose} & POST &
+        Request 6D pose estimates given current ROI and configuration. \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\subsubsection{Headset Pose Streaming}
+
+On each AR frame, ARKit provides a camera transform. The app converts this into a position and quaternion and periodically sends it via \texttt{POST /head\_pose}:
+
+\begin{verbatim}
+{
+  "position": [x, y, z],
+  "quaternion": [qx, qy, qz, qw],
+  "timestamp": 1699876543.21
+}
+\end{verbatim}
+
+The backend uses this stream to compensate for head motion between AirPlay frame capture and pose overlay, as described in Section~\ref{subsec:cv-pipeline-design}.
+
+\subsubsection{Pose Request Flow}
+
+The pose polling loop is implemented as a Swift asynchronous task:
+
+\begin{enumerate}
+    \item Read current ROI settings and model name from app state.
+    \item Construct JSON body with \texttt{"roi\_circle"}, \texttt{"color\_filter"}, \texttt{"depth\_mode"}, and \texttt{"model\_name"}.
+    \item Send \texttt{POST /avp\_pose} and await response.
+    \item Decode the returned list of transforms.
+    \item Update overlay entities on the main actor.
+\end{enumerate}
+
+Errors (timeouts, decoding failures, HTTP errors) are caught and logged in the debug window. The polling interval is configurable; during development, one to three seconds per request yielded a reasonable trade-off between responsiveness and backend load.
+
+\subsection{AirPlay Mirroring and Capture}
+\label{subsec:airplay-dev}
+
+Because ADP does not permit direct access to AVP cameras, AirPlay screen mirroring was used to obtain RGB frames for the pose backend. The development setup was:
+
+\begin{enumerate}
+    \item Enable AirPlay mirroring from the AVP to a host machine on the same network.
+    \item Run an AirPlay receiver such as \texttt{uxplay} to create a window showing the mirrored view.
+    \item Run a capture script that grabs images from this window (via platform-specific screen capture APIs) and sends them to the main API via \texttt{POST /receive\_frame}.
+\end{enumerate}
+
+Early attempts to forward the AirPlay stream directly from \texttt{uxplay} to the pose API resulted in stutter and tiling artefacts in the decoded frames, which degraded pose stability. The final design routes all AirPlay frames into the main API, where they are buffered, optionally down-sampled, and exposed via debug endpoints (\texttt{/rgb\_frame}, \texttt{/detected\_frame}).  
+
+From the VisionOS client’s perspective, AirPlay is completely invisible: it neither controls nor observes the mirroring process. This keeps the app within ADP constraints and encapsulates all capture logic on the backend host.
+
+\subsection{Concurrency and Task Structure}
+
+\subsubsection{Python Prototype}
+
+The Python prototype used explicit threads and queues to decouple:
+
+\begin{itemize}
+    \item frame capture,
+    \item ROI masking and payload preparation,
+    \item API calls and GUI updates.
+\end{itemize}
+
+Each stage consumed and produced its own queue (snapshot, mask/ROI, pose), providing basic back-pressure. This design worked well on desktop hardware but does not map directly to VisionOS.
+
+\subsubsection{Swift Concurrency on VisionOS}
+
+The VisionOS client adopts Swift’s structured concurrency model instead:
+
+\begin{itemize}
+    \item \textbf{Main actor} – UI updates and RealityKit scene modification.
+    \item \textbf{Background tasks} – Pose polling, health checks, configuration fetches.
+    \item \textbf{Isolated models/actors} – Mutable shared state such as latest pose and configuration.
+\end{itemize}
+
+The conceptual mapping is shown in Table~\ref{tab:concurrency_mapping_dev} (reproduced from Section~\ref{sec:systemdesign} for completeness).
+
+\begin{table}[H]
+    \centering
+    \begin{tabular}{@{}p{0.42\linewidth}p{0.48\linewidth}@{}}
+        \toprule
+        \textbf{Python prototype} & \textbf{\texttt{visionOS} equivalent} \\
+        \midrule
+        Snapshot capture thread & AirPlay capture + backend buffering (no direct AVP involvement). \\
+        Mask/ROI worker thread & ROI parameters generated on AVP, mask constructed in backend. \\
+        Pose queue consumer & Background pose polling task + main-actor overlay update. \\
+        \bottomrule
+    \end{tabular}
+    \caption[Concurrency mapping between Python and VisionOS]{Conceptual mapping between the Python prototype’s queues and the VisionOS concurrency model.}
+    \label{tab:concurrency_mapping_dev}
+\end{table}
+
+If network or backend performance cannot keep pace with a given polling interval, the polling task simply returns later; the UI remains responsive because all scene updates are confined to the main actor and networking runs in the background. In practice, the system was stable for interactive use when pose polling was throttled to approximately one to three requests per second.
+
+\subsection{Hooks for Occlusion-Aware Pose Filtering}
+
+The current VisionOS client directly visualizes the poses returned by the backend, but its interface already anticipates future occlusion-aware smoothing modules:
+
+\begin{itemize}
+    \item The \texttt{/avp\_pose} request accepts an optional field \texttt{"filter"} with values such as \texttt{"raw"}, \texttt{"ekf"}, \texttt{"pf"}, or \texttt{"gp"}.
+    \item The backend can route the raw pose stream from FoundationPose through an Extended Kalman Filter (EKF), Particle Filter (PF), or Gaussian Process (GP) module before returning it (see Appendix~\ref{appendix:willems}).
+    \item The VisionOS client remains unchanged; it always receives a $4\times 4$ transformation matrix for the overlay.
+\end{itemize}
+
+In all of these variants, the mathematical input to the filters consists solely of the headset pose stream and the sequence of previously estimated object poses; user interaction events do not enter the state-space model. EKF- and PF-based approaches treat the pose as the state of a nonlinear dynamical system, while GP-based approaches model pose trajectories as samples from a stochastic process with temporal covariance.
+
+These modules have been validated in simulation (Appendix~\ref{appendix:willems}) and can be integrated into the online pipeline without any modifications to the VisionOS code. This completes the path from the current “raw pose overlay” to an occlusion-aware, temporally consistent 6D pose stream suitable for more demanding Programming-by-Demonstration workflows.

@@ -1,0 +1,69 @@
+%Dokument class
+\documentclass[12pt,parskip=true,listof=totoc,bibliography=totocnumbered]{scrartcl}
+\usepackage[left= 2.5cm,right = 2cm, bottom = 3 cm]{geometry}
+
+%% Extra Packages
+\usepackage{booktabs}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta}
+\usepackage{float}
+\usepackage{amsmath}
+% \usepackage[a4paper, total={6in, 8in}]{geometry}
+% \usepackage{graphicx} % Required for inserting images
+% \usepackage{pdfpages}
+
+%Enter name and matriculation number here
+\newcommand{\Name}{Ahmed Galai}
+\newcommand{\Matrikelnummer}{10007404}
+\newcommand{\Titel}{Augmented Reality-Enhanced Programming by
+Demonstration: 6D Pose Estimation Using Apple
+Vision Pro for Intuitive Robot Teaching}
+\newcommand{\ArtArbeit}{Master's Thesis}
+
+\input{format/header}
+%%%%%
+
+\begin{document}
+%Pages without header and footer as well as page number
+\pagestyle{empty}
+\pagenumbering{Roman}
+\include{content/cover}
+\includepdf[scale=1, pages=-]{Aufgabenstellung_unterschrieben.pdf}
+\include{content/declaration}
+\include{content/kurzfassung}
+
+% Ends a page and forces all floating objects (e.g., figures) that have been defined but not yet output to be displayed on the subsequent pages. This command introduces a blank page if necessary so that the next page after the floating objects has an odd page number.
+\cleardoubleoddpage
+
+\pagestyle{headings}
+\setcounter{page}{1}
+\tableofcontents
+\clearpage
+\listoffigures \newpage
+\listoftables \newpage
+\include{content/abkuerzung} \newpage % Comment out this line if no abbreviations were used
+
+\pagenumbering{arabic}
+
+% Main content: Introduction -> State of the Art -> Objective & Methodology -> ...
+\include{content/introduction}
+\include{content/research}   % State of the Art
+\include{content/objective}  % Objective and Methodology
+\include{content/design}
+\include{content/development}
+\include{content/evaluation}
+\include{content/conclusion}
+
+% Bibliography
+\bibliographystyle{unsrtdin} % Bibliography with numbers in order of appearance
+\renewcommand\refname{Bibliography}
+% \bibliography{litvz}
+\nocite{*}
+\bibliography{sources}
+
+% Appendix
+\input{content/appendix}
+%\pagenumbering{Roman}
+
+%\include{content/zusatz}
+\end{document}
