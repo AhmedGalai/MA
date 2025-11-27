@@ -3,7 +3,7 @@
 \section{Additional Background}
 \label{sec:appendix-additional-background}
 
-This section provides additional mathematical and algorithmic background that supports the methods used in the main chapters. It covers an enhanced Iterative Closest Point (ICP) algorithm for 6D pose tracking, classical stereo vision for intrinsics and depth estimation, the ZoeDepth monocular depth estimation approach, and the stochastic state estimation methods considered for pose smoothing and occlusion handling.
+This section provides additional mathematical and algorithmic background that supports the methods used in the main chapters. It covers an enhanced Iterative Closest Point (ICP) algorithm for 6D pose tracking, classical stereo vision for intrinsics and depth estimation, the Depth-Anything V2 monocular depth estimation approach, and the stochastic state estimation methods considered for pose smoothing and occlusion handling.
 
 \subsection{ICP Enhancement Algorithm for 6D Pose Tracking}
 \label{appendix:icp}
@@ -109,42 +109,24 @@ where $f$ is the focal length of the camera (in pixels), $B$ is the baseline dis
 \textbf{Limitations in this work} \\
 During prototyping, this classical stereo pipeline was tested as a baseline. However, in the absence of carefully tuned feature extraction and robust disparity matching, the results lacked sufficient precision for reliable pose estimation. As a result, stereo-based disparity was replaced by monocular depth estimation in the main pipeline. A more detailed derivation of epipolar constraints and stereo triangulation can be found in standard references such as Hartley and Zisserman \cite{ref:hartleyzisserman} and other stereo vision textbooks \cite{ref:stereo}.
 
-\subsection{ZoeDepth: Metric and Relative Depth Estimation}
-\label{appendix:zoedepth}
+\subsection{Depth-Anything V2: Monocular Depth Estimation}
+\label{appendix:depthanything}
 
-The monocular depth estimation (MDE) transformer used in this work builds on the approach of ZoeDepth \cite{bhat2023zoedepth}. ZoeDepth introduces a unified framework that combines the strengths of relative depth estimation (RDE) and metric depth estimation (MDE).
+Depth-Anything V2 is a foundation model for monocular depth estimation based on a vision transformer (ViT) architecture. The model was trained on large-scale diverse datasets to provide robust depth predictions across different domains and lighting conditions.
 
-\textbf{Relative vs.\ metric depth} \\
+\textbf{Key Architecture Components:}
 \begin{itemize}
-    \item \textbf{Relative depth estimation (RDE):} predicts depth maps where relative differences are consistent, but global scale is undefined. This enables training across diverse datasets without needing consistent metric calibration.
-    \item \textbf{Metric depth estimation (MDE):} outputs depth values in absolute units (e.g., meters), making it useful for robotics and AR tasks but prone to overfitting to specific datasets.
+    \item \textbf{Vision Transformer (ViT) Encoder:} Processes input RGB images as patch embeddings, capturing global context through self-attention mechanisms.
+    \item \textbf{Dense Prediction Transformer (DPT) Decoder:} Reconstructs fine-grained depth maps from multi-scale transformer features.
+    \item \textbf{Metric Depth Head:} Produces calibrated metric depth values rather than relative depth rankings.
 \end{itemize}
 
-ZoeDepth leverages both: it first pre-trains on diverse datasets for relative depth, and then fine-tunes using metric annotations for scale alignment.
+In this work, the Depth-Anything-V2-base-hf model from Hugging Face Transformers~\cite{transformers-model} was used, providing a balance between accuracy and inference speed on CPU/GPU backends.
 
-\textbf{Metric bins module} \\
-A key innovation is the metric bins module, which reformulates per-pixel depth prediction as a weighted combination of discretized depth bin centers:
-\[
-d(i) = \sum_{k=1}^{N} p_i(k)\,c_k,
-\]
-where $d(i)$ is the depth at pixel $i$, $c_k$ are the bin centers, and $p_i(k)$ are soft probabilities predicted by the network. Instead of relying on a standard softmax, ZoeDepth introduces an ordinal-aware probability distribution (log-binomial) to better reflect the ordered nature of depth bins.
+The model outputs depth maps $D(u,v)$ where each pixel $(u,v)$ corresponds to a metric distance estimate in meters. These depth maps are then integrated with the CV pipeline for 6D pose estimation when external depth sensors (RealSense) are unavailable.
 
-\textbf{Generalization and zero-shot transfer} \\
-By pre-training on 12 datasets with relative depth and fine-tuning on both indoor and outdoor metric datasets, ZoeDepth achieves:
-\begin{itemize}
-    \item state-of-the-art performance on benchmark datasets such as NYU Depth~v2 and KITTI,
-    \item strong zero-shot transfer to unseen datasets across indoor, outdoor, synthetic, and real domains \cite{bhat2023zoedepth}.
-\end{itemize}
-
-\begin{figure}[ht]
-    \centering
-    \fbox{\parbox{0.9\linewidth}{ZoeDepth architecture figure placeholder}}
-    \caption[ZoeDepth architecture overview]{Overview of the ZoeDepth architecture combining relative and metric depth estimation \cite{bhat2023zoedepth}.}
-    \label{fig:zoedepth}
-\end{figure}
-
-\textbf{Relevance to this work} \\
-In this project, ZoeDepth’s transformer-based MDE was integrated (via HuggingFace~Transformers \cite{transformers-model}) to replace stereo disparity estimation. This provided more reliable depth maps aligned with RGB snapshots, making downstream ROI-masked pose estimation feasible.
+\textbf{Integration in CV Pipeline:}
+The Depth-Anything V2 model serves as a fallback depth estimation method in the full Python pipeline. When configured with \texttt{use\_realsense = False}, the pipeline automatically loads the transformer model and applies it to captured RGB frames, producing aligned depth maps for subsequent pose estimation stages.
 
 \subsection{Stochastic State Estimation and Occlusion Handling}
 \label{appendix:willems}
@@ -332,7 +314,7 @@ The Python-based prototype, described in Section~\ref{sec:systemdesign}, compris
 \begin{itemize}
     \item a model selection component for loading and preprocessing 3D meshes,
     \item an intrinsics and ROI selection interface (including circular ROI drawing and preview),
-    \item a depth estimation integration based on ZoeDepth,
+    \item a depth estimation integration based on Depth-Anything V2,
     \item a mock pose API for decoupled testing of the client logic,
     \item a queue-based concurrency design for snapshot, masking, and pose handling.
 \end{itemize}

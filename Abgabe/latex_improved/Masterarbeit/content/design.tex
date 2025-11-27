@@ -164,14 +164,16 @@ For the AVP client and the AirPlay capture process, the main API exposes the end
         Ingest latest AirPlay RGB frame (base64 encoded). \\
         \texttt{/rgb\_frame} & GET &
         Retrieve the last stored RGB frame for debugging or visualization. \\
-        \texttt{/mask}, \texttt{/mask\_debug} & GET &
-        Return binary and debug ROI masks. \\
+        \texttt{/mask} & GET &
+        Return binary ROI mask. \\
         \texttt{/intrinsics} & GET &
         Return the latest estimated camera intrinsics matrix $K$. \\
         \texttt{/depth}, \texttt{/disparity} & GET &
         Retrieve the current depth or disparity map. \\
-        \texttt{/external\_depth} & POST &
-        Inject an externally computed depth map (e.g.\ from RealSense). \\
+        \texttt{/external\_disparity} & POST &
+        Submit externally computed depth or disparity map from RealSense or other sensors. \\
+        \texttt{/detected\_frame} & GET &
+        Retrieve RGB frame with ArUco markers drawn for debugging visualization. \\
         \bottomrule
     \end{tabular}
 \end{table}
@@ -244,8 +246,27 @@ A conceptual overview is shown in Figure~\ref{fig:cv_pipeline_design}.
 
 \begin{figure}[H]
     \centering
-    \fbox{\parbox{0.9\linewidth}{Placeholder: CV pipeline diagram (AirPlay RGB $\rightarrow$ intrinsics $\rightarrow$ ROI mask $\rightarrow$ depth $\rightarrow$ FoundationPose).}}
-    \caption[Computer vision pipeline]{Computer vision pipeline inside the main API.}
+    \begin{tikzpicture}[node distance=1.5cm, auto,
+        box/.style={rectangle, draw, minimum height=1cm, minimum width=3cm, align=center}]
+
+        \node[box] (airplay) {AirPlay\\RGB Frame};
+        \node[box, below of=airplay] (intrinsics) {Intrinsics\\Estimation};
+        \node[box, below of=intrinsics] (roi) {ROI Mask\\Reconstruction};
+        \node[box, below of=roi] (depth) {Depth\\Estimation};
+        \node[box, below of=depth] (pose) {6D Pose\\Estimation};
+
+        \draw[->] (airplay) -- (intrinsics) node[midway, right] {1080p frame};
+        \draw[->] (intrinsics) -- (roi) node[midway, right] {Camera matrix $K$};
+        \draw[->] (roi) -- (depth) node[midway, right] {Binary mask};
+        \draw[->] (depth) -- (pose) node[midway, right] {Depth map $D(u,v)$};
+        \draw[->] (pose) -- ++(0,-1.5) node[below] {4×4 Transform};
+
+        \node[right=2cm of intrinsics, text width=3cm, align=left] {ArUco-based\\calibration};
+        \node[right=2cm of roi, text width=3cm, align=left] {HSV filtering\\Color thresholds};
+        \node[right=2cm of depth, text width=3cm, align=left] {RealSense or\\Depth-Anything V2};
+
+    \end{tikzpicture}
+    \caption[Computer vision pipeline]{Simplified overview of the CV pipeline stages from RGB acquisition to 6D pose output.}
     \label{fig:cv_pipeline_design}
 \end{figure}
 
@@ -333,7 +354,7 @@ Due to AVP access restrictions, a separate Python desktop prototype was develope
         Intrinsics and ROI UI &
         Capture stereo images, send to \texttt{/intrinsics}, visualize left/right/rectified views, and allow circular ROI drawing. \\
         Depth integration &
-        Integrate ZoeDepth~\cite{bhat2023zoedepth} for monocular depth maps aligned with the ROI-masked RGB. \\
+        Integrate Depth-Anything V2 for monocular depth maps aligned with the ROI-masked RGB. \\
         Pose integration &
         Connect either to a mock pose API or the real FoundationPose backend using the same payload format. \\
         Concurrency manager &
@@ -366,7 +387,7 @@ The user captures left and right images from a stereo webcam and sends them to \
 
 \subsubsection{Depth Estimation and Mock Pose API}
 
-ZoeDepth generates dense monocular depth maps that are aligned with the ROI-masked RGB image. Figure~\ref{fig:pyprogramtab2} shows the live RGB feed, the depth map, the overlay with projected mesh and axes (using a mock pose API), and the ROI-masked input frame.
+Depth-Anything V2 generates dense monocular depth maps that are aligned with the ROI-masked RGB image. Figure~\ref{fig:pyprogramtab2} shows the live RGB feed, the depth map, the overlay with projected mesh and axes (using a mock pose API), and the ROI-masked input frame.
 
 \begin{figure}[H]
   \centering
