@@ -1,8 +1,0 @@
-# Requirements for AVP API and HyperCam 2
-flask>=2.3.0
-flask-cors>=4.0.0
-requests>=2.31.0
-numpy>=1.24.0
-opencv-python>=4.8.0
-pillow>=10.0.0
-mss>=9.0.0
