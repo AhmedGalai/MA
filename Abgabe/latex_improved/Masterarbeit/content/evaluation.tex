@@ -102,12 +102,26 @@ In Setup~B (static Mac~Mini box), testers described pose updates as “slightly 
 
 In Setup~C (banana and spanner with user motion), the same processing latency combined with higher motion led to visible temporal lag between object motion and overlay updates. AirPlay occasionally produced stutter and tiling artefacts under network load, which resulted in transient pose outliers. Debug window logs confirmed corresponding spikes in \texttt{/avp\_pose} round-trip times during these episodes.
 
-\begin{figure}[H]
+\begin{table}[H]
     \centering
-    \fbox{\parbox[c][4cm][c]{10cm}{\centering Placeholder for latency/performance chart (simulator vs.\ real AVP, Setups B/C)}}
-    \caption[Prototype performance characteristics]{Qualitative performance characteristics in simulator and real-device setups: perceived update rate and API round-trip variability.}
+    \caption[Performance measurements across test setups]{Latency breakdown across test setups (values to be measured).}
     \label{fig:performanceplot}
-\end{figure}
+    \begin{tabular}{lrrr}
+        \toprule
+        \textbf{Component} & \textbf{Setup A (ms)} & \textbf{Setup B (ms)} & \textbf{Setup C (ms)} \\
+        \midrule
+        Frame Acquisition       & \_\_     & \_\_     & \_\_ \\
+        ArUco Detection         & \_\_     & \_\_     & \_\_ \\
+        Mask Reconstruction     & \_\_     & \_\_     & \_\_ \\
+        Depth Estimation        & \_\_     & \_\_     & \_\_ \\
+        Pose Estimation         & \_\_     & \_\_     & \_\_ \\
+        Network Round-Trip      & \_\_     & \_\_     & \_\_ \\
+        \midrule
+        \textbf{Total Latency}  & \_\_     & \_\_     & \_\_ \\
+        \textbf{Frame Rate}     & \_\_ fps & \_\_ fps & \_\_ fps \\
+        \bottomrule
+    \end{tabular}
+\end{table}
 
 Overall, the architecture was sufficient for interactive inspection and low-speed manipulation, but not yet suitable for tightly coupled closed-loop control.
 
@@ -235,7 +249,9 @@ Testers reported that, although the overall direction and position remained reas
     \label{fig:poseoverlay}
 \end{figure}
 
-\subsection{Simulation-Based Occlusion and Filtering Experiments}
+\subsection{Theoretical Analysis of Occlusion Handling Approaches}
+
+\textbf{Note:} This section presents a \emph{theoretical analysis} of occlusion-aware filtering methods based on the mathematical frameworks described in Appendix~\ref{appendix:willems}. These approaches were analyzed in simulation but not yet integrated into the production pipeline. The analysis below describes the expected behavior of each approach based on their documented properties and simulation results.
 
 In parallel to live AVP tests, the occlusion-aware filtering methods from Appendix~\ref{appendix:willems} were evaluated in simulation. These experiments operate purely on:
 
@@ -298,12 +314,15 @@ The main limitations observed are:
     \item sensitivity of ROI placement to fast head motion and gaze inaccuracies.
 \end{itemize}
 
-At the same time, the modular design makes these issues addressable:
+At the same time, several aspects performed well: The UI interaction proved to be intuitive and reliable across all test setups, with users able to configure ROI parameters, select models, and arrange windows without difficulty. The gaze-based ROI definition and multi-window layout were consistently rated as understandable and easy to learn, confirming the effectiveness of the spatial interaction design.
+
+The modular design makes identified issues addressable:
 
 \begin{itemize}
     \item backend optimizations or moving depth/pose closer to the sensor (e.g.\ on-device inference) would directly reduce latency,
     \item integrating EKF/PF/GP-based filters in the backend could stabilize pose trajectories without touching the VisionOS client,
-    \item improving ROI feedback and timing on the client side would make interaction more robust.
+    \item improving ROI feedback and timing on the client side would make interaction more robust,
+    \item mask image quality can be improved by using alternative approaches such as 3D spatial pose information of the AR window to better align ROI definitions with the captured AirPlay frames, reducing artifacts from color-based HSV filtering.
 \end{itemize}
 
 Future evaluations with a larger and more diverse user group, longer sessions, and more complex tasks (e.g.\ actual robot teaching workflows) will be required to fully characterize comfort, learnability, and long-term robustness. The current results demonstrate that the end-to-end design is functional and that the main technical risks—VisionOS integration, backend connectivity, and pose overlay—have been resolved in a working prototype that can now serve as a platform for further refinement.

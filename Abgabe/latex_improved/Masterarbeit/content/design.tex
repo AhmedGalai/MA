@@ -470,6 +470,8 @@ In the immersive view, the pose is visualized as a 3D arrow aligned with the est
 \subsection{Occlusion Handling and State Estimation (Design)}
 \label{subsec:occlusion-design}
 
+\textbf{Note:} This section describes the \emph{theoretical framework} and \emph{planned implementation} for occlusion-aware pose filtering. The Extended Kalman Filter (EKF) was implemented in the \texttt{coordinate\_transformer.py} module but not yet integrated into the production API. Particle Filter (PF) and Gaussian Process (GP) approaches were analyzed in simulation and remain as future work.
+
 The architecture anticipates occlusions and noisy pose estimates but does not yet include a full online correction module in the running system. Two complementary strategies were considered: geometric reconstruction and probabilistic filtering.
 
 \begin{table}[H]
