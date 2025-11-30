@@ -1,6 +1,6 @@
 """
-Final Pipeline Core
-Integrates all components for complete 6D pose estimation pipeline
+Final Pipeline Core - Monocular Depth Estimation (MDE) Version
+Integrates MDE with other components for a 6D pose estimation pipeline that does not require a hardware depth sensor.
 """
 
 import numpy as np
@@ -14,32 +14,29 @@ import os
 import json
 from datetime import datetime
 
-from .realsense_depth import RealSenseDepth
+from .depth_anything import DepthAnythingV2
+from .pose_estimator import PoseEstimator
 from .pose_manager import PoseManager
 from .coordinate_transformer import CoordinateTransformer
-from .pose_estimator import PoseEstimator
-
 
 class FinalPipeline:
     """
-    Complete pipeline for 6D pose estimation:
-    1. Capture RealSense depth (fixed camera)
-    2. Get headset pose (streaming)
-    3. Apply probabilistic pose correction
-    4. Transform mask AVP → RealSense
-    5. Estimate pose in RealSense view
-    6. Transform pose back to AVP view
+    Complete pipeline for 6D pose estimation using Monocular Depth Estimation:
+    1. Get AVP RGB frame and mask.
+    2. Estimate depth from the AVP RGB frame using DepthAnythingV2.
+    3. Estimate pose directly in AVP view using the estimated depth and mask.
     """
 
     def __init__(self):
         """Initialize pipeline components"""
-        print("[Pipeline] Initializing Final Pipeline...")
+        print("[Pipeline] Initializing MDE Pipeline...")
 
         # Initialize components
-        self.realsense = RealSenseDepth()
+        self.depth_estimator = DepthAnythingV2()
+        self.pose_estimator = PoseEstimator()
         self.pose_manager = PoseManager()
         self.transformer = CoordinateTransformer(self.pose_manager)
-        self.pose_estimator = PoseEstimator()
+
 
         # State
         self.last_process_time = None
@@ -50,59 +47,32 @@ class FinalPipeline:
             "avg_processing_time_ms": 0.0
         }
 
-        # Check if ready
-        if not self.realsense.available:
-            print("[WARNING] RealSense not available - pipeline will not work")
-
-        if not self.pose_manager.is_calibrated():
-            print("[WARNING] Pipeline not calibrated - run calibrate_with_aruco()")
-
         # Create directory for saving pose requests
         self.pose_request_save_dir = "pose_estimation_io"
         os.makedirs(self.pose_request_save_dir, exist_ok=True)
 
-        print("[Pipeline] Initialization complete")
+        print("[Pipeline] MDE Pipeline Initialization complete")
 
-    def calibrate_with_aruco(self, headset_image: np.ndarray,
-                            headset_K: np.ndarray, headset_dist: np.ndarray) -> bool:
-        """
-        Perform one-time ArUco calibration
-
-        Args:
-            headset_image: Image from headset with ArUco marker visible
-            headset_K: Headset camera intrinsics
-            headset_dist: Headset distortion coefficients
-
-        Returns:
-            True if calibration successful
-        """
-        return self.pose_manager.calibrate_with_aruco(
-            self.realsense,
-            headset_image,
-            headset_K,
-            headset_dist
-        )
+    def calibrate_with_aruco(self, *args, **kwargs):
+        """Calibration is not required for the MDE pipeline."""
+        print("[WARNING] Calibration is not used in the MDE pipeline.")
+        return True
 
     def process_frame(self, avp_rgb: Optional[np.ndarray] = None,
                      avp_mask: Optional[np.ndarray] = None,
                      headset_pose: Optional[Dict] = None,
                      save_pose_request_data: bool = False) -> Dict:
         """
-        Process frame through complete pipeline
+        Process frame through the MDE pipeline.
 
         Args:
-            avp_rgb: RGB frame from AVP (optional, for visualization)
-            avp_mask: Object mask from AVP view (H, W) binary
-            headset_pose: Current headset pose dict with 'position' and 'rotation'
-            save_pose_request_data: If True, saves inputs and outputs of pose estimation
+            avp_rgb: RGB frame from AVP.
+            avp_mask: Object mask from AVP view (H, W) binary.
+            headset_pose: Current headset pose (not used in this pipeline but kept for API compatibility).
+            save_pose_request_data: If True, saves inputs and outputs of pose estimation.
 
         Returns:
-            Dictionary with results:
-                - pose_avp_view: Final pose in AVP coordinates
-                - pose_rs_view: Pose in RealSense coordinates
-                - confidence: Pose confidence score
-                - processing_time_ms: Processing time
-                - success: Boolean success flag
+            Dictionary with results.
         """
         start_time = time.time()
         result = {
@@ -113,100 +83,50 @@ class FinalPipeline:
 
         try:
             # Validate inputs
+            if avp_rgb is None:
+                result["error"] = "No RGB image provided"
+                return result
             if avp_mask is None:
                 result["error"] = "No mask provided"
                 return result
 
-            if not self.realsense.available:
-                result["error"] = "RealSense not available"
-                return result
+            # Step 1: Estimate depth from AVP RGB
+            print("[Pipeline] Step 1: Estimating depth from AVP RGB...")
+            depth_map_avp = self.depth_estimator.estimate_depth(avp_rgb)
+            # The depth map is normalized to 0-1, so we need to scale it to a metric scale.
+            # This is a key challenge in MDE. For now, we'll use a fixed scale factor.
+            depth_map_avp = (depth_map_avp * 1000).astype(np.uint16) # Scale to millimeters
 
-            if not self.pose_manager.is_calibrated():
-                result["error"] = "Pipeline not calibrated"
-                return result
-
-            # Step 1: Capture RealSense depth
-            print("[Pipeline] Step 1: Capturing RealSense depth...")
-            rs_data = self.realsense.capture_frame()
-            if rs_data is None:
-                result["error"] = "Failed to capture RealSense frame"
-                return result
-
-            depth_map = rs_data["depth"]
-            rs_rgb = rs_data["rgb"]
-            K_rs = rs_data["intrinsics"]["K"]
-            dist_rs = rs_data["intrinsics"]["dist"]
-
-            # Step 2: Update headset pose with correction
-            if headset_pose is not None:
-                print("[Pipeline] Step 2: Updating headset pose...")
-                self.pose_manager.update_headset_pose(headset_pose)
-
-                # Calculate time delta
-                dt = 0.033  # Default 30fps
-                if self.last_process_time is not None:
-                    dt = time.time() - self.last_process_time
-
-                # Apply probabilistic correction
-                corrected_pose = self.transformer.update_pose_with_correction(headset_pose, dt)
-                print(f"[Pipeline] Pose corrected: {corrected_pose['position']}")
-            else:
-                print("[Pipeline] No headset pose provided")
-
-            # Step 3: Transform mask from AVP → RealSense view
-            print("[Pipeline] Step 3: Transforming mask AVP → RealSense...")
-
-            # Need AVP camera intrinsics (estimate from mask size)
+            # Step 2: Estimate 6D pose in AVP view
+            print("[Pipeline] Step 2: Estimating pose in AVP view...")
             h_avp, w_avp = avp_mask.shape
             K_avp = self._estimate_camera_matrix(w_avp, h_avp)
+            dist_avp = np.zeros(5)
 
-            h_rs, w_rs = depth_map.shape
-            mask_rs = self.transformer.transform_mask_avp_to_realsense(
-                avp_mask, K_avp, K_rs, (w_rs, h_rs)
+            pose_avp = self.pose_estimator.estimate_pose_from_depth_and_mask(
+                depth_map_avp, avp_mask, K_avp, dist_avp
             )
 
-            if mask_rs is None:
-                result["error"] = "Mask transformation failed"
-                return result
-
-            # Step 4: Estimate 6D pose in RealSense view
-            print("[Pipeline] Step 4: Estimating pose in RealSense view...")
-            pose_rs = self.pose_estimator.estimate_pose_from_depth_and_mask(
-                depth_map, mask_rs, K_rs, dist_rs
-            )
-
-            if pose_rs is None:
+            if pose_avp is None:
                 result["error"] = "Pose estimation failed"
                 self.stats["failed_poses"] += 1
                 if save_pose_request_data:
-                    self._save_pose_request_data(depth_map, mask_rs, K_rs, dist_rs, None)
-                return result
-
-            # Step 5: Transform pose back to AVP view
-            print("[Pipeline] Step 5: Transforming pose RealSense → AVP...")
-            pose_avp = self._transform_pose_rs_to_avp(pose_rs)
-
-            if pose_avp is None:
-                result["error"] = "Pose transformation to AVP failed"
+                    self._save_pose_request_data(depth_map_avp, avp_mask, K_avp, dist_avp, None)
                 return result
             
             if save_pose_request_data:
-                self._save_pose_request_data(depth_map, mask_rs, K_rs, dist_rs, pose_rs)
+                self._save_pose_request_data(depth_map_avp, avp_mask, K_avp, dist_avp, pose_avp)
 
             # Success!
             result["success"] = True
-            result["pose_rs_view"] = {
-                "rvec": pose_rs["rvec"].tolist(),
-                "tvec": pose_rs["tvec"].tolist(),
-                "confidence": pose_rs["confidence"]
-            }
             result["pose_avp_view"] = {
                 "rvec": pose_avp["rvec"].tolist(),
                 "tvec": pose_avp["tvec"].tolist(),
                 "confidence": pose_avp["confidence"]
             }
-            result["confidence"] = pose_rs["confidence"]
-            result["num_points"] = pose_rs["num_points"]
+            result["pose_rs_view"] = None # Not applicable
+            result["confidence"] = pose_avp["confidence"]
+            result["num_points"] = pose_avp["num_points"]
 
             # Optional: Add visualizations
             if avp_rgb is not None:
@@ -223,24 +143,20 @@ class FinalPipeline:
             self.stats["failed_poses"] += 1
 
         finally:
-            # Update stats
-            processing_time = (time.time() - start_time) * 1000  # ms
+            processing_time = (time.time() - start_time) * 1000
             result["processing_time_ms"] = processing_time
-
             self.stats["frames_processed"] += 1
-            alpha = 0.9  # Exponential moving average
+            alpha = 0.9
             self.stats["avg_processing_time_ms"] = (
                 alpha * self.stats.get("avg_processing_time_ms", 0) +
                 (1 - alpha) * processing_time
             )
-
             self.last_process_time = time.time()
-
             print(f"[Pipeline] Processing time: {processing_time:.1f}ms")
             print(f"[Pipeline] Success: {result['success']}")
 
         return result
-
+    
     def _save_pose_request_data(self, depth_map, mask, K, dist, pose_result):
         """Saves the inputs and output of a pose estimation request."""
         try:
@@ -275,43 +191,6 @@ class FinalPipeline:
         except Exception as e:
             print(f"[ERROR] Could not save pose request data: {e}")
 
-    def _transform_pose_rs_to_avp(self, pose_rs: Dict) -> Optional[Dict]:
-        """
-        Transform pose from RealSense to AVP coordinate frame
-
-        Args:
-            pose_rs: Pose in RealSense frame
-
-        Returns:
-            Pose in AVP frame, or None
-        """
-        # Get transformation matrix
-        T_rs_avp = self.pose_manager.get_transform_avp_to_realsense()
-        if T_rs_avp is None:
-            return None
-
-        # Invert to get T_avp_rs
-        T_avp_rs = self.transformer.invert_transformation(T_rs_avp)
-
-        # Get pose in RealSense frame
-        T_rs_obj = self.transformer.compute_transformation_matrix(
-            pose_rs["rvec"], pose_rs["tvec"]
-        )
-
-        # Transform to AVP frame: T_avp_obj = T_avp_rs * T_rs_obj
-        T_avp_obj = T_avp_rs @ T_rs_obj
-
-        # Extract rvec, tvec
-        R_avp = T_avp_obj[:3, :3]
-        tvec_avp = T_avp_obj[:3, 3]
-        rvec_avp, _ = cv.Rodrigues(R_avp)
-
-        return {
-            "rvec": rvec_avp.flatten(),
-            "tvec": tvec_avp,
-            "confidence": pose_rs["confidence"]
-        }
-
     def _estimate_camera_matrix(self, w: int, h: int) -> np.ndarray:
         """Estimate camera intrinsics from image size"""
         f = 0.8 * max(w, h)
@@ -322,15 +201,6 @@ class FinalPipeline:
                              pose: Dict, K: np.ndarray) -> str:
         """
         Create visualization image with pose overlay
-
-        Args:
-            rgb: RGB image
-            mask: Binary mask
-            pose: Pose dictionary
-            K: Camera intrinsics
-
-        Returns:
-            Base64 encoded JPEG string
         """
         vis = rgb.copy()
 
@@ -376,33 +246,26 @@ class FinalPipeline:
     def shutdown(self):
         """Shutdown pipeline and cleanup resources"""
         print("[Pipeline] Shutting down...")
-        self.realsense.stop()
+        # No realsense to stop
         print("[Pipeline] Shutdown complete")
 
 
 # Test functionality
 if __name__ == "__main__":
-    print("Testing Final Pipeline...")
+
+    print("Testing MDE Pipeline...")
 
     pipeline = FinalPipeline()
 
-    if not pipeline.realsense.available:
-        print("RealSense not available - cannot test pipeline")
-        exit(1)
-
     # Test frame processing
     print("\nProcessing test frame...")
+    test_avp_rgb = np.random.randint(0, 255, size=(480, 640, 3), dtype=np.uint8)
     test_mask = np.zeros((480, 640), dtype=np.uint8)
     test_mask[200:300, 300:400] = 255
 
-    test_pose = {
-        "position": [0.0, 0.0, 0.5],
-        "rotation": [0.0, 0.0, 0.0]
-    }
-
     result = pipeline.process_frame(
-        avp_mask=test_mask,
-        headset_pose=test_pose
+        avp_rgb=test_avp_rgb,
+        avp_mask=test_mask
     )
 
     print(f"\nResult: {result['success']}")

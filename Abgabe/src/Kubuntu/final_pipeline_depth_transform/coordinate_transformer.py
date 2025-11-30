@@ -182,6 +182,36 @@ class CoordinateTransformer:
 
         return mask_rs
 
+    def transform_depth_rs_to_avp(self, depth_rs: np.ndarray, K_rs: np.ndarray, K_avp: np.ndarray, size_avp: Tuple[int, int]) -> Optional[np.ndarray]:
+        """
+        Transform depth map from RealSense view to AVP view.
+
+        Args:
+            depth_rs: Depth map in RealSense view (H_rs, W_rs)
+            K_rs: RealSense camera intrinsics
+            K_avp: AVP camera intrinsics
+            size_avp: AVP image size (width, height)
+
+        Returns:
+            Transformed depth map in AVP view, or None
+        """
+        T_rs_avp = self.pose_manager.get_transform_avp_to_realsense()
+        if T_rs_avp is None:
+            return None
+
+        # Invert the transformation to get from RealSense to AVP
+        T_avp_rs = self.invert_transformation(T_rs_avp)
+        R_avp_rs = T_avp_rs[:3, :3]
+
+        # Compute homography
+        H = K_avp @ R_avp_rs @ np.linalg.inv(K_rs)
+
+        # Warp depth image
+        w_avp, h_avp = size_avp
+        depth_avp = cv.warpPerspective(depth_rs, H, (w_avp, h_avp), flags=cv.INTER_NEAREST, borderMode=cv.BORDER_CONSTANT, borderValue=0)
+
+        return depth_avp
+
     def update_pose_with_correction(self, measured_pose: dict, dt: float) -> dict:
         """
         Update pose estimate with probabilistic correction using Kalman filter

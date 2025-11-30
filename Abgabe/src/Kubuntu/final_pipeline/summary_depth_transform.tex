@@ -5,7 +5,7 @@
 \usepackage{geometry}
 \geometry{a4paper, margin=1in}
 
-\title{CV Pipeline and API Summary (Original Approach)}
+\title{CV Pipeline and API Summary (Depth Transform Approach)}
 \author{}
 \date{\today}
 
@@ -25,11 +25,9 @@
 \hline
 \textbf{2. Update Headset Pose} & Receives and updates the headset's position and rotation, applying a probabilistic correction using a Kalman filter. & \texttt{pose\_manager.py}, \texttt{coordinate\_transformer.py} \\
 \hline
-\textbf{3. Transform Mask AVP -> RealSense} & Transforms the 2D mask from the Apple Vision Pro's view to the RealSense camera's view using a homography transformation. & \texttt{coordinate\_transformer.py} \\
+\textbf{3. Transform Depth RS -> AVP} & Transforms the depth map from the RealSense camera's view to the Apple Vision Pro's view using a homography transformation. & \texttt{coordinate\_transformer.py} \\
 \hline
-\textbf{4. Estimate 6D Pose in RealSense View} & Estimates the 6D pose of the object using the depth map and the transformed mask. It can use a point cloud centroid/PCA approach or a PnP algorithm if a 3D model is available. & \texttt{pose\_estimator.py} \\
-\hline
-\textbf{5. Transform Pose RealSense -> AVP} & Transforms the estimated pose from the RealSense camera's coordinate system back to the Apple Vision Pro's coordinate system. & \texttt{coordinate\_transformer.py} \\
+\textbf{4. Estimate 6D Pose in AVP View} & Estimates the 6D pose of the object using the AVP mask and the transformed depth map. It can use a point cloud centroid/PCA approach or a PnP algorithm if a 3D model is available. & \texttt{pose\_estimator.py} \\
 \hline
 \textbf{(Optional) Calibration} & Performs a one-time calibration using ArUco markers to find the transformation between the headset and the RealSense camera. & \texttt{pose\_manager.py}, \texttt{cv2.aruco} \\
 \hline

@@ -20,5 +20,3 @@ Pillow>=8.0.0
 
 # Optional: For advanced transformations
 scikit-learn>=0.24.0
-torch
-transformers
