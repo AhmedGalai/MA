@@ -124,23 +124,17 @@ class CoordinateTransformer:
         # Last update time for prediction
         self.last_update_time = None
 
-    def transform_point_avp_to_realsense(self, point_avp: np.ndarray,
-                                        use_drift_correction: bool = True) -> Optional[np.ndarray]:
+    def transform_point_avp_to_realsense(self, point_avp: np.ndarray) -> Optional[np.ndarray]:
         """
         Transform 3D point from AVP frame to RealSense frame
 
         Args:
             point_avp: Point in AVP frame [x, y, z]
-            use_drift_correction: If True, apply head pose drift correction
 
         Returns:
             Point in RealSense frame, or None if not calibrated
         """
-        if use_drift_correction:
-            T = self.pose_manager.get_corrected_transform_avp_to_realsense()
-        else:
-            T = self.pose_manager.get_transform_avp_to_realsense()
-
+        T = self.pose_manager.get_transform_avp_to_realsense()
         if T is None:
             print("[ERROR] Not calibrated - cannot transform")
             return None
@@ -155,8 +149,7 @@ class CoordinateTransformer:
 
     def transform_mask_avp_to_realsense(self, mask_avp: np.ndarray,
                                        K_avp: np.ndarray, K_rs: np.ndarray,
-                                       size_rs: Tuple[int, int],
-                                       use_drift_correction: bool = True) -> Optional[np.ndarray]:
+                                       size_rs: Tuple[int, int]) -> Optional[np.ndarray]:
         """
         Transform 2D mask from AVP view to RealSense view using homography
 
@@ -165,16 +158,11 @@ class CoordinateTransformer:
             K_avp: AVP camera intrinsics
             K_rs: RealSense camera intrinsics
             size_rs: RealSense image size (width, height)
-            use_drift_correction: If True, apply head pose drift correction
 
         Returns:
             Transformed mask in RealSense view, or None
         """
-        if use_drift_correction:
-            T = self.pose_manager.get_corrected_transform_avp_to_realsense()
-        else:
-            T = self.pose_manager.get_transform_avp_to_realsense()
-
+        T = self.pose_manager.get_transform_avp_to_realsense()
         if T is None:
             return None
 
@@ -193,6 +181,36 @@ class CoordinateTransformer:
         mask_rs = cv.warpPerspective(mask_avp, H, (w_rs, h_rs))
 
         return mask_rs
+
+    def transform_depth_rs_to_avp(self, depth_rs: np.ndarray, K_rs: np.ndarray, K_avp: np.ndarray, size_avp: Tuple[int, int]) -> Optional[np.ndarray]:
+        """
+        Transform depth map from RealSense view to AVP view.
+
+        Args:
+            depth_rs: Depth map in RealSense view (H_rs, W_rs)
+            K_rs: RealSense camera intrinsics
+            K_avp: AVP camera intrinsics
+            size_avp: AVP image size (width, height)
+
+        Returns:
+            Transformed depth map in AVP view, or None
+        """
+        T_rs_avp = self.pose_manager.get_transform_avp_to_realsense()
+        if T_rs_avp is None:
+            return None
+
+        # Invert the transformation to get from RealSense to AVP
+        T_avp_rs = self.invert_transformation(T_rs_avp)
+        R_avp_rs = T_avp_rs[:3, :3]
+
+        # Compute homography
+        H = K_avp @ R_avp_rs @ np.linalg.inv(K_rs)
+
+        # Warp depth image
+        w_avp, h_avp = size_avp
+        depth_avp = cv.warpPerspective(depth_rs, H, (w_avp, h_avp), flags=cv.INTER_NEAREST, borderMode=cv.BORDER_CONSTANT, borderValue=0)
+
+        return depth_avp
 
     def update_pose_with_correction(self, measured_pose: dict, dt: float) -> dict:
         """

@@ -1,0 +1,68 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{geometry}
+\geometry{a4paper, margin=1in}
+
+\title{CV Pipeline and API Summary (MDE Approach)}
+\author{}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section*{CV Pipeline Steps}
+
+\begin{longtable}{| >{\raggedright\arraybackslash}p{0.15\textwidth} | >{\raggedright\arraybackslash}p{0.5\textwidth} | >{\raggedright\arraybackslash}p{0.25\textwidth} |}
+\hline
+\textbf{Step} & \textbf{Description of how it works} & \textbf{Dependencies (e.g. files, libraries)} \\
+\hline
+\endhead
+
+\textbf{1. Estimate Depth from AVP RGB} & Estimates a depth map from the AVP's RGB image using the `DepthAnythingV2` monocular depth estimation model. & \texttt{depth\_anything.py}, \texttt{torch}, \texttt{transformers} \\
+\hline
+\textbf{2. Estimate 6D Pose in AVP View} & Estimates the 6D pose of the object using the AVP mask and the estimated depth map. It can use a point cloud centroid/PCA approach or a PnP algorithm if a 3D model is available. Note: This approach does not require RealSense or calibration. & \texttt{pose\_estimator.py} \\
+\hline
+\end{longtable}
+
+\section*{main\_api.py Endpoints}
+
+\begin{longtable}{| >{\raggedright\arraybackslash}p{0.25\textwidth} | >{\raggedright\arraybackslash}p{0.1\textwidth} | >{\raggedright\arraybackslash}p{0.55\textwidth} |}
+\hline
+\textbf{Endpoint} & \textbf{Method} & \textbf{Description} \\
+\hline
+\endhead
+
+\texttt{/health} & GET & Health check endpoint, returns status of the pipeline. \\
+\hline
+\texttt{/receive\_frame} & POST & Receives an RGB frame from an external source and stores it. \\
+\hline
+\texttt{/update\_head\_pose} & POST & Stores the headset's pose from the AVP (currently stored but not used in MDE pipeline). \\
+\hline
+\texttt{/process\_with\_mask} & POST & Processes a frame with a mask to estimate the 6D pose. \\
+\hline
+\texttt{/calibrate} & POST & Performs ArUco calibration (not used in this pipeline). \\
+\hline
+\texttt{/trigger\_save\_pose\_request} & POST & Sets a flag to save the next pose request's inputs and outputs. \\
+\hline
+\texttt{/stats} & GET & Get pipeline statistics. \\
+\hline
+\texttt{/avp\_frame} & GET & Get the latest AVP frame as a base64 encoded string. \\
+\hline
+\texttt{/mask} & GET & Get the latest mask as a base64 encoded string. \\
+\hline
+\texttt{/pose\_result} & GET & Get the latest pose estimation result. \\
+\hline
+\texttt{/head\_pose} & GET & Get the latest head pose. \\
+\hline
+\texttt{/intrinsics} & GET & Get the RealSense camera intrinsics (not applicable for this pipeline). \\
+\hline
+\texttt{/pose\_history} & GET & Get the recent pose history. \\
+\hline
+\texttt{/shutdown} & POST & Shutdown the pipeline. \\
+\hline
+\end{longtable}
+
+\end{document}
