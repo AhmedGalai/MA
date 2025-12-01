@@ -124,17 +124,23 @@ class CoordinateTransformer:
         # Last update time for prediction
         self.last_update_time = None
 
-    def transform_point_avp_to_realsense(self, point_avp: np.ndarray) -> Optional[np.ndarray]:
+    def transform_point_avp_to_realsense(self, point_avp: np.ndarray,
+                                        use_drift_correction: bool = True) -> Optional[np.ndarray]:
         """
         Transform 3D point from AVP frame to RealSense frame
 
         Args:
             point_avp: Point in AVP frame [x, y, z]
+            use_drift_correction: If True, apply head pose drift correction
 
         Returns:
             Point in RealSense frame, or None if not calibrated
         """
-        T = self.pose_manager.get_transform_avp_to_realsense()
+        if use_drift_correction:
+            T = self.pose_manager.get_corrected_transform_avp_to_realsense()
+        else:
+            T = self.pose_manager.get_transform_avp_to_realsense()
+
         if T is None:
             print("[ERROR] Not calibrated - cannot transform")
             return None
@@ -149,7 +155,8 @@ class CoordinateTransformer:
 
     def transform_mask_avp_to_realsense(self, mask_avp: np.ndarray,
                                        K_avp: np.ndarray, K_rs: np.ndarray,
-                                       size_rs: Tuple[int, int]) -> Optional[np.ndarray]:
+                                       size_rs: Tuple[int, int],
+                                       use_drift_correction: bool = True) -> Optional[np.ndarray]:
         """
         Transform 2D mask from AVP view to RealSense view using homography
 
@@ -158,11 +165,16 @@ class CoordinateTransformer:
             K_avp: AVP camera intrinsics
             K_rs: RealSense camera intrinsics
             size_rs: RealSense image size (width, height)
+            use_drift_correction: If True, apply head pose drift correction
 
         Returns:
             Transformed mask in RealSense view, or None
         """
-        T = self.pose_manager.get_transform_avp_to_realsense()
+        if use_drift_correction:
+            T = self.pose_manager.get_corrected_transform_avp_to_realsense()
+        else:
+            T = self.pose_manager.get_transform_avp_to_realsense()
+
         if T is None:
             return None
 

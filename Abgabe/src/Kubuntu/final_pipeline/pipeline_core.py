@@ -275,18 +275,23 @@ class FinalPipeline:
         except Exception as e:
             print(f"[ERROR] Could not save pose request data: {e}")
 
-    def _transform_pose_rs_to_avp(self, pose_rs: Dict) -> Optional[Dict]:
+    def _transform_pose_rs_to_avp(self, pose_rs: Dict, use_drift_correction: bool = True) -> Optional[Dict]:
         """
         Transform pose from RealSense to AVP coordinate frame
 
         Args:
             pose_rs: Pose in RealSense frame
+            use_drift_correction: If True, apply head pose drift correction
 
         Returns:
             Pose in AVP frame, or None
         """
-        # Get transformation matrix
-        T_rs_avp = self.pose_manager.get_transform_avp_to_realsense()
+        # Get transformation matrix (with optional drift correction)
+        if use_drift_correction:
+            T_rs_avp = self.pose_manager.get_corrected_transform_avp_to_realsense()
+        else:
+            T_rs_avp = self.pose_manager.get_transform_avp_to_realsense()
+
         if T_rs_avp is None:
             return None
 

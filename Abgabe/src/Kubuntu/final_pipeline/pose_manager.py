@@ -9,6 +9,7 @@ import json
 import time
 from typing import Optional, Dict, Tuple
 from collections import deque
+from scipy.spatial.transform import Rotation
 
 from .config import ARUCO_CONFIG, CALIBRATION_FILES
 
@@ -32,6 +33,11 @@ class PoseManager:
         # Current headset pose
         self.current_headset_pose = None
         self.last_headset_update = None
+
+        # Baseline headset pose (saved at calibration time)
+        # Used for drift correction when ArUco is not visible
+        self.baseline_headset_pose = None
+        self.baseline_timestamp = None
 
         # Calibration data
         self.calibration_data = {
@@ -336,6 +342,14 @@ class PoseManager:
         self.calibration_data["realsense_to_world"] = T_realsense_world
         self.calibration_data["avp_to_realsense"] = T_realsense_avp
 
+        # Save baseline headset pose for drift correction
+        if self.current_headset_pose is not None:
+            self.baseline_headset_pose = self.current_headset_pose.copy()
+            self.baseline_timestamp = time.time()
+            print("[Calibration] Saved baseline headset pose for drift correction")
+        else:
+            print("[WARNING] No current headset pose available - drift correction disabled")
+
         self._save_calibration()
 
         print("[Calibration] Calibration successful!")
@@ -359,6 +373,37 @@ class PoseManager:
         tvec = T[:3, 3]
         rvec, _ = cv.Rodrigues(R)
         return rvec.flatten(), tvec
+
+    def _pose_dict_to_matrix(self, pose: Dict) -> np.ndarray:
+        """
+        Convert pose dictionary (from streamed headset data) to 4x4 transformation matrix
+
+        Args:
+            pose: Dictionary with 'position' [x, y, z] and 'rotation' [rx, ry, rz] or 'quaternion'
+
+        Returns:
+            4x4 transformation matrix
+        """
+        position = np.array(pose["position"])
+
+        # Handle rotation representation
+        if "quaternion" in pose:
+            # Quaternion format: need to determine if it's [qw, qx, qy, qz] or [qx, qy, qz, qw]
+            # Assuming [qw, qx, qy, qz] format (scalar first)
+            quat = np.array(pose["quaternion"])
+            # Convert quaternion to rotation matrix using scipy
+            r = Rotation.from_quat([quat[1], quat[2], quat[3], quat[0]])  # scipy expects [qx, qy, qz, qw]
+            R = r.as_matrix()
+        else:
+            # Rotation vector (Rodrigues)
+            rvec = np.array(pose["rotation"])
+            R, _ = cv.Rodrigues(rvec.reshape(3, 1))
+
+        # Construct transformation matrix
+        T = np.eye(4, dtype=np.float64)
+        T[:3, :3] = R
+        T[:3, 3] = position
+        return T
 
     def _save_calibration(self):
         """Save calibration data to files"""
@@ -388,8 +433,54 @@ class PoseManager:
         return self.calibration_data["avp_to_realsense"] is not None
 
     def get_transform_avp_to_realsense(self) -> Optional[np.ndarray]:
-        """Get AVP to RealSense transformation matrix"""
+        """
+        Get AVP to RealSense transformation matrix (base calibration, no drift correction)
+
+        For drift-corrected transform, use get_corrected_transform_avp_to_realsense()
+        """
         return self.calibration_data["avp_to_realsense"]
+
+    def get_corrected_transform_avp_to_realsense(self) -> Optional[np.ndarray]:
+        """
+        Get AVP to RealSense transformation with drift correction
+
+        When ArUco markers are not visible, this method corrects the base calibration
+        transform using the deviation between the current streamed head pose and the
+        baseline head pose captured at calibration time.
+
+        This compensates for drift in the AVP's pose tracking, but is subject to
+        accumulated drift over time if the head pose data drifts from the true position.
+
+        Returns:
+            Drift-corrected transformation matrix, or base transform if correction unavailable
+        """
+        base_transform = self.calibration_data["avp_to_realsense"]
+        if base_transform is None:
+            return None
+
+        # If no baseline or current head pose, return base transform without correction
+        if self.baseline_headset_pose is None or self.current_headset_pose is None:
+            return base_transform
+
+        try:
+            # Convert poses to transformation matrices
+            H_baseline = self._pose_dict_to_matrix(self.baseline_headset_pose)
+            H_current = self._pose_dict_to_matrix(self.current_headset_pose)
+
+            # Compute delta: how much has the headset moved since calibration?
+            # Delta represents the relative motion in the AVP's local coordinate frame
+            Delta = H_current @ np.linalg.inv(H_baseline)
+
+            # Apply correction to the base transform
+            # The AVP camera has moved by Delta in its local frame, so we compensate
+            # by applying the inverse of Delta to maintain the correct RS-AVP relationship
+            corrected_transform = base_transform @ np.linalg.inv(Delta)
+
+            return corrected_transform
+
+        except Exception as e:
+            print(f"[WARNING] Failed to apply drift correction: {e}")
+            return base_transform
 
 
 if __name__ == "__main__":

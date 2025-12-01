@@ -23,15 +23,15 @@
 
 \textbf{1. Capture RealSense Depth} & Captures aligned RGB and depth frames from a RealSense camera. & \texttt{realsense\_depth.py}, \texttt{pyrealsense2} \\
 \hline
-\textbf{2. Update Headset Pose} & Receives and updates the headset's position and rotation, applying a probabilistic correction using a Kalman filter. & \texttt{pose\_manager.py}, \texttt{coordinate\_transformer.py} \\
+\textbf{2. Update Headset Pose} & Receives and stores the headset's position and rotation from the AVP streaming data. The streamed pose is saved at calibration time as a baseline, and subsequent poses are used to compute drift correction. The deviation between current and baseline poses is applied to correct the calibrated transformation when ArUco markers are not visible. \textbf{Note:} This correction is subject to accumulated drift in the AVP's pose tracking over time. & \texttt{pose\_manager.py} \\
 \hline
-\textbf{3. Transform Mask AVP -> RealSense} & Transforms the 2D mask from the Apple Vision Pro's view to the RealSense camera's view using a homography transformation. & \texttt{coordinate\_transformer.py} \\
+\textbf{3. Transform Mask AVP -> RealSense} & Transforms the 2D mask from the Apple Vision Pro's view to the RealSense camera's view using a homography transformation computed from the calibrated extrinsic transformation with drift correction applied based on headset pose deviation. & \texttt{coordinate\_transformer.py} \\
 \hline
 \textbf{4. Estimate 6D Pose in RealSense View} & Estimates the 6D pose of the object using the depth map and the transformed mask. It can use a point cloud centroid/PCA approach or a PnP algorithm if a 3D model is available. & \texttt{pose\_estimator.py} \\
 \hline
-\textbf{5. Transform Pose RealSense -> AVP} & Transforms the estimated pose from the RealSense camera's coordinate system back to the Apple Vision Pro's coordinate system. & \texttt{coordinate\_transformer.py} \\
+\textbf{5. Transform Pose RealSense -> AVP} & Transforms the estimated pose from the RealSense camera's coordinate system back to the Apple Vision Pro's coordinate system using the inverse of the drift-corrected transformation. & \texttt{coordinate\_transformer.py} \\
 \hline
-\textbf{(Optional) Calibration} & Performs a one-time calibration using ArUco markers to find the transformation between the headset and the RealSense camera. & \texttt{pose\_manager.py}, \texttt{cv2.aruco} \\
+\textbf{(Optional) Calibration} & Performs a one-time calibration using ArUco markers: detects an ArUco board (3$\times$4 grid) in the RealSense view to establish $T_{\text{RS} \leftarrow \text{board}}$, and a single headset-mounted marker (ID 0) in the AVP view to establish $T_{\text{AVP} \leftarrow \text{marker}}$. These are composed to approximate the relative transformation between cameras, though the coordinate frames are not strictly aligned. The current streamed headset pose is saved as a baseline reference for subsequent drift correction. & \texttt{pose\_manager.py}, \texttt{cv2.aruco} \\
 \hline
 \end{longtable}
 
@@ -47,7 +47,7 @@
 \hline
 \texttt{/receive\_frame} & POST & Receives an RGB frame from an external source and stores it. \\
 \hline
-\texttt{/update\_head\_pose} & POST & Updates the headset's pose from the AVP. \\
+\texttt{/update\_head\_pose} & POST & Stores the headset's pose from the AVP for future reference. \\
 \hline
 \texttt{/process\_with\_mask} & POST & Processes a frame with a mask to estimate the 6D pose. \\
 \hline
