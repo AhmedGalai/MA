@@ -1,530 +1,720 @@
-# Master's Thesis - Abgabe Directory TODO
+# Master Thesis Completion TODO
 
-**Project**: Augmented Reality-Enhanced Programming by Demonstration: 6D Pose Estimation Using Apple Vision Pro for Intuitive Robot Teaching
-**Author**: Ahmed Galai
-**Date**: November 25, 2025
-**Status**: Final Submission Preparation
+This document provides a comprehensive checklist for completing and submitting the master thesis. Items are organized by priority and estimated time requirements.
 
----
-
-## Overview
-
-This document tracks the current status of the thesis submission directory, identifies mismatches between documentation and implementation, and outlines next steps for completion.
+**Last Updated:** 2025-11-27
+**Thesis Title:** Augmented Reality-Enhanced Programming by Demonstration: 6D Pose Estimation Using Apple Vision Pro
+**Current Completion:** ~92-95%
+**Estimated Time to 100%:** 25-40 hours
 
 ---
 
-## Directory Structure Status
+## Overview of Deliverables
 
-### ✅ Completed
-
-```
-Abgabe/
-├── latex/                          # LaTeX thesis source
-│   └── Masterarbeit/
-│       ├── main.tex               # Main thesis document
-│       ├── main.pdf               # Compiled PDF (if present)
-│       ├── content/               # Chapter files
-│       ├── figures/               # Images and diagrams
-│       └── sources.bib            # Bibliography
-│
-├── src/                           # Source code (organized)
-│   ├── Kubuntu/                   # Linux backend
-│   │   ├── backend/              # Python API server
-│   │   ├── models/               # 3D mesh models (.ply)
-│   │   ├── docs/                 # Documentation
-│   │   └── README.md             # Kubuntu-specific guide
-│   │
-│   ├── MacOS/                     # macOS backend
-│   │   ├── backend/              # Python API server
-│   │   ├── models/               # 3D mesh models (.ply)
-│   │   ├── docs/                 # Documentation
-│   │   ├── start.sh              # Startup script
-│   │   └── README.md             # MacOS-specific guide
-│   │
-│   └── VisionOS/                  # Vision Pro app
-│       ├── visionos/             # Swift/visionOS project
-│       │   └── PoseOverlayApp/
-│       └── README.md             # VisionOS development guide
-│
-└── Todo.md                        # This file
-```
-
-### 📊 Current Statistics
-
-- **Python files**: 94 (backend pipeline, APIs, utilities)
-- **Swift files**: 18 (VisionOS application)
-- **3D models**: 18 (.ply files, duplicated in Kubuntu/MacOS)
-- **Documentation**: 6 markdown files (READMEs)
-- **LaTeX chapters**: 10 (introduction, research, design, etc.)
+- [ ] **Thesis Documentation** (LaTeX) - 95% complete
+- [ ] **Source Code** (Python + Swift) - 100% complete, needs organization
+- [ ] **Evaluation Data** - Partially complete, needs measurements
+- [ ] **Figures and Diagrams** - 26/32 complete (6 missing)
+- [ ] **Bibliography** - Missing 10 entries
+- [ ] **Code Organization** - Needs consolidation
 
 ---
 
-## Thesis vs Implementation Mapping
+## Critical Priority (Must Complete Before Submission)
 
-### Chapter 4: System Design
+### 1. Fix Bibliography Entries (2-4 hours)
 
-**Documented Components**:
-1. ✅ Apple Vision Pro client (visionOS)
-2. ✅ AirPlay receiver (external, uxplay)
-3. ✅ Main API backend (Python/Flask)
-4. ✅ FoundationPose 6D pose estimation API (external collaborator)
+**Status:** CRITICAL - LaTeX won't compile
+**Blockers:** None
+**Dependencies:** None
 
-**Implementation Status**:
-- ✅ Main API: `src/MacOS/backend/final_pipeline/main_api.py`
-- ✅ CV Pipeline: `src/MacOS/backend/final_pipeline/pipeline_core.py`
-- ✅ RealSense depth: `src/MacOS/backend/final_pipeline/realsense_depth.py`
-- ✅ VisionOS app: `src/VisionOS/visionos/PoseOverlayApp/`
+**Tasks:**
+- [ ] Verify all 10 missing citations exist in literature
+  - [ ] `apple_entitlements` - Apple Developer Documentation
+  - [ ] `transformers-model` - Hugging Face paper
+  - [ ] `ref:hartleyzisserman` - Hartley & Zisserman book
+  - [ ] `ref:stereo` - Scharstein & Szeliski stereo vision
+  - [ ] `chang2015shapenet` - ShapeNet dataset paper
+  - [ ] `wang2019normalized` - NOCS paper
+  - [ ] `lin2017focal` - Focal Loss (RetinaNet) paper
+  - [ ] `groueix2018atlasnet` - AtlasNet paper
+  - [ ] `he2022fs6d` - FS6D paper
+  - [ ] `labbe2022megapose` - MegaPose paper
+- [ ] Find complete BibTeX entries for each
+- [ ] Add to `latex_improved/Masterarbeit/sources.bib`
+- [ ] Verify LaTeX compilation succeeds
+- [ ] Check all citations appear correctly in PDF
 
-**Mismatches**:
-- ⚠️ **External dependencies not included**:
-  - FoundationPose API (collaborator's Docker container)
-  - UxPlay (AirPlay receiver, system package)
-  - Depth estimation models (HuggingFace endpoints)
-- ⚠️ **Calibration data not included**: ArUco calibration matrices
-- ⚠️ **Legacy pipelines included**: `full_python_pipeline_backup_v*` directories
-
----
-
-### Chapter 5: Development
-
-**Documented Features**:
-1. ✅ Mock API integration → Real API integration
-2. ✅ Main window (model selection, depth mode)
-3. ✅ ROI window (radius, color filter)
-4. ✅ Debug window (logs, diagnostics)
-5. ✅ Immersive view (3D pose overlay)
-
-**Implementation Status**:
-- ✅ All UI components present in Swift code
-- ✅ Network services implemented (`PoseService`, `ModelService`, `HeadPoseService`)
-- ✅ Matrix conversion utilities (`MatrixUtils.swift`)
-- ✅ Concurrency via Swift async/await
-
-**Mismatches**:
-- ⚠️ **Mock API code still present**: Legacy endpoints in some backend files
-- ⚠️ **Python prototype included**: Desktop TkInter UI (not documented as deliverable)
-- ⚠️ **Debug utilities scattered**: Multiple `tk_debugging*.py` files
+**Resources:**
+- Google Scholar for BibTeX export
+- ACM Digital Library, IEEE Xplore for conference papers
+- ArXiv for preprints
+- See `LATEX_IMPROVEMENTS.md` for template entries
 
 ---
 
-### Chapter 6: Evaluation
+### 2. Remove or Replace Placeholder Content (1-2 hours)
 
-**Documented Evaluation**:
-- Technical performance metrics (latency, accuracy)
-- Usability assessment (user tasks, feedback)
-- Lighting/occlusion robustness tests
+**Status:** PARTIALLY COMPLETE - Latency chart replaced with table template
+**Blockers:** None for removal, data collection for replacement
+**Dependencies:** Evaluation data (for replacement)
 
-**Implementation Status**:
-- ❌ **Evaluation data NOT included**:
-  - Raw experiment data
-  - Latency measurements
-  - User study results
-  - Test scenarios/scripts
+**Tasks:**
+- [x] **evaluation.tex line 107** - Latency chart - **COMPLETED** (replaced with table template)
+- [ ] **evaluation.tex line 163** - User experience ratings
+  - **Option A:** Remove figure
+  - **Option B:** Replace with table placeholder
+  - **Option C:** Collect data and fill in
+- [ ] **evaluation.tex line 233** - Pose overlay comparison
+  - **Option A:** Remove figure
+  - **Option B:** Note "Screenshots to be captured"
+  - **Option C:** Take actual screenshots from Vision Pro
+- [ ] **design.tex line 247** - CV pipeline diagram
+  - **Option A:** Remove reference
+  - **Option B:** Use TikZ placeholder (see LATEX_IMPROVEMENTS.md)
+  - **Option C:** Create actual diagram (see Priority 2)
+- [ ] **appendix.tex line 92** - Epipolar geometry
+  - **Option A:** Reference external source (Hartley & Zisserman)
+  - **Option B:** Create diagram (see Priority 3)
+- [ ] **appendix.tex line 141** - ZoeDepth/Depth-Anything architecture
+  - **Option A:** Reference paper/model card
+  - **Option B:** Create diagram (see Priority 3)
 
-**Action Required**:
-- Decide if evaluation data should be added to `Abgabe/`
-- If yes: Create `evaluation/` directory with datasets
-
----
-
-### Appendix
-
-**Documented**:
-- Occlusion handling strategies (EKF, PF, GP-based)
-- Multi-camera stereo depth projection
-- Willems' Fundamental Lemma (data-driven correction)
-
-**Implementation Status**:
-- ⚠️ **Partially implemented**:
-  - Pose filtering hooks exist in API (`filter` parameter)
-  - Actual filter modules NOT in current codebase
-  - Simulation code NOT included
-
-**Note**: Appendix describes design/theory, not necessarily deployed code
+**Recommendation:** For critical deadline, use Option A (remove) or Option B (placeholder table) for evaluation figures, Option B (TikZ) for CV pipeline.
 
 ---
 
-## Known Issues & Mismatches
+### 3. Update Occlusion Handling Sections (1-2 hours)
 
-### 1. Multiple Pipeline Versions
+**Status:** ✅ COMPLETE
+**Blockers:** None
+**Dependencies:** Code audit (already completed)
 
-**Issue**: Backend contains 4+ pipeline implementations:
-- `backend/final_pipeline/` ← **Current production**
-- `backend/full_python_pipeline/` ← Legacy
-- `backend/full_python_pipeline_backup/` ← Legacy
-- `backend/full_python_pipeline_backup_v2/` ← Legacy
-- `backend/full_python_pipeline_backup_v3/` ← Legacy
+**Tasks:**
+- [x] Add disclaimer to `design.tex` Section 4.6 - **COMPLETED**
+  - [x] Note that EKF implemented but not integrated
+  - [x] Clarify PF/GP as theoretical exploration
+- [x] Update `development.tex` Section 5.7 - **COMPLETED**
+  - [x] Describe current implementation status
+  - [x] Mention `coordinate_transformer.py` Kalman filter
+  - [x] Note lack of integration into main API
+- [x] Update `evaluation.tex` Section 6.5 - **COMPLETED**
+  - [x] Change "simulation results" to "theoretical analysis"
+  - [x] Add disclaimer about planned vs completed work
+  - [x] Update language to reflect expected behavior, not measured
 
-**Impact**: Confusing for code review, increases directory size
-
-**Recommendation**:
-- ✅ Keep `final_pipeline/` (documented in thesis)
-- ⚠️ Consider removing backup versions OR
-- 📁 Move to `archive/` directory with explanation
-
----
-
-### 2. Missing External Dependencies
-
-**Issue**: External components mentioned in thesis but not included:
-
-1. **FoundationPose API** (collaborator's backend)
-   - Thesis: Section 4.2
-   - Source: [matchcow_pose_api]
-   - Status: Dockerized, hosted separately
-
-2. **AnyDepth / ZoeDepth** (monocular depth models)
-   - Thesis: Section 4.3.3
-   - Source: HuggingFace endpoints
-   - Status: Cloud-based inference
-
-3. **UxPlay** (AirPlay receiver)
-   - Thesis: Section 5.4
-   - Source: GitHub (FDH2/UxPlay)
-   - Status: System-level installation
-
-**Recommendation**:
-- Document in `External_Dependencies.md`
-- Provide links/references
-- Clarify what is/isn't included in submission
+**Resources:**
+- See `LATEX_IMPROVEMENTS.md` Section 4 for exact text to add
+- See `MISSING_CONTENT.md` Issue #3 for details
 
 ---
 
-### 3. Platform-Specific Code Duplication
+### 4. Fix Depth Model Inconsistency (30 minutes)
 
-**Issue**: Kubuntu and MacOS directories contain identical backend code
+**Status:** HIGH - Technical inaccuracy
+**Blockers:** None
+**Dependencies:** None
 
-**Current State**:
-- `src/Kubuntu/backend/` == `src/MacOS/backend/` (except `start.sh`)
-- Models duplicated: `src/Kubuntu/models/` == `src/MacOS/models/`
+**Tasks:**
+- [ ] Update `appendix.tex` Section A.3 title
+  - Change "ZoeDepth" → "Depth-Anything V2"
+- [ ] Rewrite Section A.3 content
+  - Describe Depth-Anything V2 architecture
+  - Update implementation details
+  - Fix citation if available
+- [ ] Update any references to ZoeDepth in other chapters
+- [ ] Search for "AnyDepth" and update if found
 
-**Impact**:
-- Redundancy (increases size)
-- Maintenance burden (need to sync changes)
-
-**Alternatives**:
-1. **Keep as-is**: Clear separation for platform-specific deployment
-2. **Shared backend**: `src/backend/` + platform-specific startup scripts
-3. **Symlinks**: Link common files (doesn't work for all filesystems)
-
-**Current Choice**: Keep separated (chosen for thesis submission clarity)
-
----
-
-### 4. Missing Startup/Deployment Documentation
-
-**Issue**: No unified getting-started guide at top level
-
-**What's Missing**:
-- Quick start for reviewers
-- Dependencies overview
-- System architecture diagram (as image)
-- Build/run instructions summary
-
-**Recommendation**:
-- Create `README.md` in `Abgabe/` root
-- Reference platform-specific READMEs
-- Add architecture diagram from thesis (Figure 4.1)
+**Resources:**
+- See `LATEX_IMPROVEMENTS.md` Section 3
+- Depth-Anything V2 model card: https://huggingface.co/depth-anything/Depth-Anything-V2-base-hf
 
 ---
 
-### 5. VisionOS Build Artifacts
+### 5. Fix API Endpoint Documentation (30 minutes)
 
-**Issue**: Xcode project may contain build artifacts
+**Status:** MEDIUM-HIGH - Documentation accuracy
+**Blockers:** None
+**Dependencies:** None
 
-**Check**:
-```bash
-cd src/VisionOS/visionos/PoseOverlayApp
-ls -la | grep -E "DerivedData|xcuserdata|build"
-```
+**Tasks:**
+- [ ] Update `design.tex` Table 4.4
+  - [ ] Change `/external_depth` → `/external_disparity`
+  - [ ] Add `/detected_frame` endpoint
+  - [ ] Remove `/mask_debug` if present
+- [ ] Verify all endpoint names match implementation
+- [ ] Update any text referencing changed endpoints
 
-**Recommendation**:
-- Remove before submission:
-  - `*.xcuserdata/` (user-specific)
-  - `DerivedData/` (build cache)
-  - `build/` (compiled binaries)
-- Keep: `.xcodeproj`, source files, `Packages/`
-
----
-
-### 6. Calibration and Configuration Files
-
-**Issue**: Some config files may contain environment-specific values
-
-**Check**:
-- `backend/app_config.py` - May have hardcoded IPs
-- `backend/final_pipeline/config.py` - Paths may be absolute
-- `.env` files (if any) - Should not include secrets
-
-**Recommendation**:
-- Use placeholder values (e.g., `API_HOST = "192.168.1.XXX"`)
-- Include `.env.example` templates
-- Document in READMEs
+**Resources:**
+- See `LATEX_IMPROVEMENTS.md` Section 5
+- See System Verification Report for endpoint list
 
 ---
 
-## Next Steps
+### 6. Resolve TODO in Conclusion (15 minutes)
 
-### Priority 1: Critical for Submission
+**Status:** ✅ COMPLETE
+**Blockers:** None
+**Dependencies:** None
 
-- [ ] **Compile final PDF**:
+**Tasks:**
+- [x] Review `conclusion.tex` line 46 TODO comment - **COMPLETED**
+- [x] Choose implementation option: **Option B selected**
+  - **Option A:** Remove comment
+  - **Option B:** Add paragraph about IMU/RL future work - **IMPLEMENTED**
+- [x] Implement chosen option - **COMPLETED**
+
+**Resources:**
+- See `LATEX_IMPROVEMENTS.md` Section 6 for text template
+
+---
+
+### 7. Compile LaTeX and Fix Errors (30 minutes)
+
+**Status:** CRITICAL - Must verify before submission
+**Blockers:** Tasks 1-6 above
+**Dependencies:** All LaTeX fixes above
+
+**Tasks:**
+- [ ] Navigate to `latex_improved/Masterarbeit/`
+- [ ] Run `pdflatex Masterarbeit.tex`
+- [ ] Run `bibtex Masterarbeit`
+- [ ] Run `pdflatex Masterarbeit.tex` (twice)
+- [ ] Check for compilation errors
+- [ ] Verify all citations resolve (no "??" in PDF)
+- [ ] Check all cross-references work
+- [ ] Review PDF for formatting issues
+- [ ] Check that no "Placeholder:" text appears
+
+---
+
+## High Priority (Should Complete If Time Permits)
+
+### 8. Collect Evaluation Data and Create Figures (4-8 hours)
+
+**Status:** PARTIALLY COMPLETE - Boilerplate text added, data collection still pending
+**Blockers:** Requires running system, Vision Pro access
+**Dependencies:** Working system, test environment
+
+**Tasks:**
+- [ ] **Performance Measurements:**
+  - [ ] Run Setup A (simulator) tests
+    - Measure API round-trip times
+    - Record frame rates
+    - Log component latencies
+  - [ ] Run Setup B (static real device) tests
+    - Measure end-to-end latency
+    - Time AirPlay capture
+    - Time depth estimation
+    - Time pose estimation
+    - Record network round-trip
+  - [ ] Run Setup C (motion) tests
+    - Same measurements under motion
+    - Note any outliers or degradation
+  - [x] Create performance table template - **COMPLETED** (table with placeholders added to evaluation.tex)
+    - [ ] Fill in measured values (pending actual data collection)
+
+- [x] **Usability Assessment (qualitative):** - **COMPLETED**
+  - [x] Added text confirming UI interaction proved intuitive and reliable
+  - [x] Documented mask quality improvement suggestions (3D spatial pose approach)
+  - [ ] Collect quantitative ratings (1-5 scale) for each aspect (optional)
+  - [ ] Calculate averages (optional)
+
+- [ ] **Pose Overlay Screenshots:**
+  - [ ] Capture screenshots from Vision Pro
+    - Mac Mini box (static, good alignment)
+    - Banana model (motion artifacts)
+    - Spanner model (occlusion test)
+  - [ ] Annotate screenshots if needed
+  - [ ] Create comparison figure
+
+**Tools Needed:**
+- Running Python backend
+- Vision Pro with app installed
+- Screen recording / screenshot capability
+- Timing instrumentation in code
+
+**Output:**
+- [x] Performance table template with placeholders for evaluation.tex
+- [x] Qualitative usability text added to evaluation.tex
+- [ ] Measured data for tables (pending)
+- [ ] Screenshots for pose comparison (pending)
+
+---
+
+### 9. Create CV Pipeline Diagram (2-3 hours)
+
+**Status:** MEDIUM-HIGH - Improves clarity
+**Blockers:** None
+**Dependencies:** None
+
+**Tasks:**
+- [ ] Choose diagram tool:
+  - TikZ (LaTeX native)
+  - draw.io / diagrams.net
+  - Inkscape
+  - Adobe Illustrator / Affinity Designer
+- [ ] Design diagram showing:
+  - AirPlay frame acquisition
+  - Intrinsics estimation (ArUco)
+  - ROI mask reconstruction (HSV)
+  - Depth estimation (RealSense / Transformers)
+  - 6D pose estimation (FoundationPose)
+  - Data formats at each stage
+  - Optional: timing annotations
+- [ ] Export as PDF or PNG (300+ DPI)
+- [ ] Add to `latex_improved/Masterarbeit/figures/`
+- [ ] Update `design.tex` line 247 to reference actual figure
+
+**Alternative:** Use TikZ template from `LATEX_IMPROVEMENTS.md` Section 7
+
+---
+
+### 10. Standardize Dataset Names (30 minutes)
+
+**Status:** ✅ COMPLETE
+**Blockers:** None
+**Dependencies:** None
+
+**Tasks:**
+- [x] Search `research.tex` for dataset name variations - **COMPLETED**
+- [x] Decide on standard formatting: - **COMPLETED**
+  - "YCB-Video" (with hyphen) ✓
+  - "Occluded-LINEMOD" (with hyphen) ✓
+  - "T-LESS" (with hyphen) ✓
+- [x] Apply find & replace consistently - **COMPLETED** (fixed "OccludedLINEMOD" → "Occluded-LINEMOD")
+- [x] Verify capitalization matches official dataset names - **COMPLETED**
+
+---
+
+### 11. Fix Future Access Dates in Bibliography (15 minutes)
+
+**Status:** LOW-MEDIUM - Minor error
+**Blockers:** None
+**Dependencies:** None
+
+**Tasks:**
+- [ ] Open `sources.bib`
+- [ ] Find all entries with "Accessed: 2025-09-XX"
+- [ ] Replace with actual access date or 2024-12-15
+- [ ] Verify formatting consistency
+
+---
+
+## Medium Priority (Nice to Have)
+
+### 12. Consolidate Source Code Directories (3-4 hours)
+
+**Status:** MEDIUM - Improves submission quality
+**Blockers:** None
+**Dependencies:** None
+
+**Tasks:**
+- [ ] **Backup current state:**
   ```bash
-  cd latex/Masterarbeit
-  pdflatex main.tex
-  bibtex main
-  pdflatex main.tex
-  pdflatex main.tex
+  cd /home/ag/Desktop/MA/
+  tar -czf Abgabe_backup_$(date +%Y%m%d).tar.gz Abgabe/
   ```
 
-- [ ] **Create root README.md**:
-  - Project overview
-  - Directory structure
+- [ ] **Create unified structure:**
+  - [ ] Create `src/python_backend/` directory
+  - [ ] Copy MacOS content to python_backend
+  - [ ] Create `src/models/` directory
+  - [ ] Copy models once to src/models/
+  - [ ] Update path references in Python files
+  - [ ] Test imports and model loading
+
+- [ ] **Remove duplicates:**
+  - [ ] Delete `src/MacOS/` (after verification)
+  - [ ] Delete `src/Kubuntu/` (after verification)
+  - [ ] Delete duplicate model directories
+
+- [ ] **Remove backup files:**
+  ```bash
+  rm src/python_backend/full_python_pipeline/tk_debugging_unified_backup.py
+  ```
+
+- [ ] **Verify everything works:**
+  - [ ] Test Python imports
+  - [ ] Verify model loading
+  - [ ] Check config resolution
+
+**Resources:**
+- See `FILE_ORGANIZATION.md` for detailed plan
+- See `CODEBASE AUDIT REPORT` for rationale
+
+**Time Savings:** Reduces codebase from 204MB to 100MB
+
+---
+
+### 13. Create Unified Configuration File (1-2 hours)
+
+**Status:** MEDIUM - Code quality improvement
+**Blockers:** None
+**Dependencies:** Task 12 (code consolidation)
+
+**Tasks:**
+- [ ] Create `src/python_backend/config.py`
+  - Use template from audit report Section 7.2
+  - Add environment variable support
+  - Remove hardcoded IPs and ports
+- [ ] Remove old config files:
+  - `app_config.py` (root)
+  - `full_python_pipeline/app_config.py`
+  - Merge `final_pipeline/config.py`
+- [ ] Update imports in all Python files
+- [ ] Test configuration loading
+- [ ] Create `.env.example` file
+
+**Resources:**
+- See `CODEBASE AUDIT REPORT` Section 7.2 for complete template
+
+---
+
+### 14. Fix Code Quality Issues (1-2 hours)
+
+**Status:** MEDIUM - Professional polish
+**Blockers:** None
+**Dependencies:** Task 12 (code consolidation)
+
+**Tasks:**
+- [ ] Fix bare except clauses
+  - File: `final_pipeline/pose_manager.py` lines 58, 64
+  - Add specific exception types
+- [ ] Address TODOs in code
+  - File: `pose_estimator.py` lines 157, 210
+  - Either implement or document as future work
+- [ ] Remove commented-out code
+  - Clean up `app_config.py` files
+  - Remove unused imports
+
+**Resources:**
+- See `CODEBASE AUDIT REPORT` Sections 2.2-2.4
+
+---
+
+### 15. Add Optional Diagrams to Appendix (2-3 hours)
+
+**Status:** LOW-MEDIUM - Visual clarity
+**Blockers:** None
+**Dependencies:** None
+
+**Tasks:**
+- [ ] **Epipolar Geometry Diagram** (Appendix A.2):
+  - Option A: Reference Hartley & Zisserman figure
+  - Option B: Create simple TikZ diagram
+  - Option C: Find CC-licensed image
+- [ ] **Depth-Anything Architecture** (Appendix A.3):
+  - Option A: Reference official paper figure
+  - Option B: Create high-level block diagram
+  - Option C: Use Hugging Face model card image
+- [ ] Export and add to `figures/` directory
+- [ ] Update appendix.tex references
+
+---
+
+### 16. Create Related Work Comparison Table (30 minutes)
+
+**Status:** LOW - Helpful but not critical
+**Blockers:** None
+**Dependencies:** None
+
+**Tasks:**
+- [ ] Add comparison table to `research.tex`
+  - Compare this work vs Soares et al. vs Lotsaris et al.
+  - Columns: System, Platform, Pose Method, Interaction, Limitation
+- [ ] Highlight unique contributions
+
+**Resources:**
+- See `LATEX_IMPROVEMENTS.md` Section 11 for template
+
+---
+
+### 17. Create Top-Level Documentation (1 hour)
+
+**Status:** LOW - Submission completeness
+**Blockers:** None
+**Dependencies:** None
+
+**Tasks:**
+- [ ] Create `/home/ag/Desktop/MA/Abgabe/README.md`
+  - Thesis title and author
+  - Directory structure overview
+  - How to compile LaTeX
+  - How to run source code
+  - System requirements
+- [ ] Create `src/README.md`
+  - Code organization
   - Quick start guide
-  - References to detailed READMEs
-
-- [ ] **Clean VisionOS build artifacts**:
-  ```bash
-  cd src/VisionOS/visionos/PoseOverlayApp
-  rm -rf DerivedData build
-  find . -name "*.xcuserdata" -exec rm -rf {} +
-  ```
-
-- [ ] **Document external dependencies**:
-  - Create `External_Dependencies.md`
-  - List FoundationPose API, UxPlay, depth models
-  - Provide links and versions
+  - Dependencies
+- [ ] Update `python_backend/docs/` if needed
 
 ---
 
-### Priority 2: Recommended Improvements
+### 18. Final Proofreading Pass (2-3 hours)
 
-- [ ] **Archive legacy pipelines**:
-  ```bash
-  mkdir -p archive
-  mv src/Kubuntu/backend/full_python_pipeline_backup* archive/
-  mv src/MacOS/backend/full_python_pipeline_backup* archive/
-  ```
+**Status:** MEDIUM - Quality assurance
+**Blockers:** All LaTeX changes complete
+**Dependencies:** Tasks 1-11 complete
 
-- [ ] **Add system architecture diagram**:
-  - Export Figure 4.1 from thesis as PNG
-  - Include in root README.md
+**Tasks:**
+- [ ] Read entire thesis PDF start to finish
+- [ ] Check for:
+  - Typos and grammar errors
+  - Inconsistent terminology
+  - Broken cross-references
+  - Missing figure/table captions
+  - Formatting inconsistencies
+  - Awkward phrasing
+- [ ] Verify all technical claims are accurate
+- [ ] Check that abstracts match content
+- [ ] Ensure conclusions align with evaluation
+- [ ] Verify all acronyms defined in list
 
-- [ ] **Verify all file paths**:
-  - Search for hardcoded absolute paths
-  - Replace with relative or configurable paths
-
-- [ ] **Add `.gitignore` (if using git)**:
-  ```
-  __pycache__/
-  *.pyc
-  .DS_Store
-  venv/
-  *.log
-  DerivedData/
-  xcuserdata/
-  ```
+**Tools:**
+- Grammarly (if available)
+- LaTeX spell checker
+- PDF reader for review
 
 ---
 
-### Priority 3: Optional Enhancements
+## Low Priority (Future Improvements)
 
-- [ ] **Include evaluation data** (if approved):
-  - Create `evaluation/` directory
-  - Latency measurements CSV
-  - User study responses
-  - Test scenario descriptions
+### 19. Enhance Limitations Discussion (30 minutes)
 
-- [ ] **Add video demonstrations**:
-  - System setup walkthrough
-  - Usage demonstration
-  - Pose estimation in action
-  - Store in `media/` or link to external hosting
+**Status:** LOW - Academic completeness
+**Blockers:** None
+**Dependencies:** None
 
-- [ ] **Create unified requirements.txt**:
-  - Consolidate Python dependencies
-  - Pin versions for reproducibility
-  - Document CUDA/PyTorch versions
-
-- [ ] **Write troubleshooting FAQ**:
-  - Common issues during setup
-  - Network connectivity problems
-  - Platform-specific gotchas
+**Tasks:**
+- [ ] Expand `evaluation.tex` Section 6.6
+- [ ] Add more detailed analysis of:
+  - ADP restrictions impact
+  - AirPlay latency quantification
+  - Single-object limitation
+  - Network dependency
+  - Hardware requirements
+  - Generalizability concerns
 
 ---
 
-## Testing Checklist
+### 20. Add System Requirements Section (30 minutes)
 
-Before final submission, verify:
+**Status:** LOW - Documentation completeness
+**Blockers:** None
+**Dependencies:** None
 
-### Backend (Kubuntu/MacOS)
+**Tasks:**
+- [ ] Add subsection to `development.tex`
+- [ ] List hardware requirements
+- [ ] List software dependencies
+- [ ] Reference requirements.txt
 
-- [ ] `start.sh` executes without errors
-- [ ] Virtual environment creates successfully
-- [ ] Dependencies install from requirements.txt
-- [ ] Main API starts on port 5000
-- [ ] `/health` endpoint responds
-- [ ] `/models` endpoint lists .ply files
-- [ ] Sample model selection works
-
-### VisionOS App
-
-- [ ] Xcode project opens without errors
-- [ ] Code compiles for visionOS target
-- [ ] Signing configured (or team placeholder)
-- [ ] Info.plist has required permissions
-- [ ] No hardcoded IP addresses in code
-- [ ] README accurately describes build steps
-
-### Documentation
-
-- [ ] All READMEs render correctly (Markdown syntax)
-- [ ] Code blocks have proper syntax highlighting
-- [ ] File paths are accurate
-- [ ] Cross-references work (e.g., "see Section 4.2")
-- [ ] No broken links to external resources
+**Resources:**
+- See `LATEX_IMPROVEMENTS.md` Section 12
 
 ---
 
-## File Size Considerations
+### 21. Add Ethical Considerations (30 minutes)
 
-### Current Estimates
+**Status:** LOW - Academic completeness
+**Blockers:** None
+**Dependencies:** None
 
-- LaTeX + PDF: ~10-20 MB
-- Python backend: ~5 MB (excluding venv)
-- Swift/VisionOS: ~2-3 MB (excluding build artifacts)
-- 3D models (.ply): ~5-10 MB (18 files × ~500KB each)
-- **Total**: ~25-40 MB
-
-### If Size is Issue
-
-Reduce by:
-1. Removing backup pipeline versions (saves ~3-5 MB)
-2. Keeping only essential .ply models (saves ~5-8 MB)
-3. Compressing PDF (if very large)
-4. Excluding high-res figures from LaTeX (use lower DPI)
+**Tasks:**
+- [ ] Add brief section to conclusion or evaluation
+- [ ] Discuss:
+  - Robot safety implications
+  - Privacy concerns
+  - Accessibility
+  - Responsible AI use
+- [ ] Keep concise (1-2 paragraphs)
 
 ---
 
-## Submission Format Notes
+## Pre-Submission Checklist
 
-Depending on university requirements:
+### Documentation Review
 
-### Digital Submission (ZIP/USB)
+- [ ] All missing bibliography entries added and verified
+- [ ] LaTeX compiles without errors
+- [ ] All citations resolve correctly
+- [ ] All cross-references work (no "??")
+- [ ] No placeholder text visible in PDF
+- [ ] All figures have captions
+- [ ] All tables have captions
+- [ ] Abstracts (German and English) present and accurate
+- [ ] List of abbreviations complete
+- [ ] List of symbols complete
+- [ ] Acknowledgments section complete (if required)
+- [ ] Declaration of authorship signed
+
+### Code Review
+
+- [ ] No backup files in submission
+- [ ] No commented-out code in production files
+- [ ] All TODOs addressed or documented
+- [ ] README files present and accurate
+- [ ] requirements.txt files complete
+- [ ] No hardcoded passwords/secrets
+- [ ] Code is organized logically
+- [ ] Build/run instructions work
+
+### Submission Package
+
+- [ ] Create final submission directory
+- [ ] Include PDF of thesis
+- [ ] Include all LaTeX sources
+- [ ] Include all figures
+- [ ] Include complete source code
+- [ ] Include README at top level
+- [ ] Exclude unnecessary files (.DS_Store, __pycache__, etc.)
+- [ ] Verify total package size reasonable
+- [ ] Create archive (ZIP or TAR.GZ)
+- [ ] Test extraction of archive
+
+### Final Verification
+
+- [ ] PDF opens correctly in multiple PDF readers
+- [ ] All pages render correctly
+- [ ] Figures are high quality (not pixelated)
+- [ ] Page numbers correct
+- [ ] Table of contents matches actual content
+- [ ] Bibliography formatting consistent
+- [ ] No broken URLs in bibliography
+- [ ] Code compiles/runs on clean system
+- [ ] All required forms signed
+
+---
+
+## Time Estimates Summary
+
+| Priority | Tasks | Estimated Time |
+|----------|-------|----------------|
+| **Critical** | 1-7 | 6-11 hours |
+| **High** | 8-11 | 7-12 hours |
+| **Medium** | 12-18 | 9-14 hours |
+| **Low** | 19-21 | 1.5-3 hours |
+| **Pre-submission** | Review & Package | 2-3 hours |
+
+**Total Estimated Time:** 25.5-43 hours
+
+**Minimum for Submission:** Complete all Critical tasks (6-11 hours)
+
+---
+
+## Recommended Completion Order
+
+### Week 1: Critical Fixes (Day 1-2, 6-11 hours)
+1. Add missing bibliography entries
+2. Remove/replace placeholder content
+3. Update occlusion handling sections
+4. Fix depth model inconsistency
+5. Fix API endpoint documentation
+6. Resolve conclusion TODO
+7. Compile LaTeX and fix errors
+
+**Milestone:** Thesis compiles and is technically submittable
+
+### Week 2: Data Collection (Day 3-4, 7-12 hours)
+8. Collect evaluation data and create figures
+9. Create CV pipeline diagram
+10. Standardize dataset names
+11. Fix bibliography dates
+
+**Milestone:** All figures present, evaluation complete
+
+### Week 3: Code Cleanup (Day 5-6, 9-14 hours)
+12. Consolidate source code directories
+13. Create unified configuration
+14. Fix code quality issues
+
+**Milestone:** Code organized and professional
+
+### Week 4: Polish (Day 7, 3-6 hours)
+15-18. Optional enhancements
+Final proofreading
+Pre-submission checklist
+
+**Milestone:** Thesis ready for submission
+
+---
+
+## Risk Management
+
+### High Risk Items
+
+| Risk | Impact | Mitigation |
+|------|--------|------------|
+| Missing citations don't exist | Can't compile | Verify all papers before deadline, have backup plan |
+| Can't collect evaluation data | Weak evaluation | Use placeholder tables, acknowledge limitations |
+| LaTeX won't compile | Can't submit | Start compilation testing early, have backup template |
+
+### Backup Plans
+
+**If running out of time:**
+1. **Priority:** Complete only Critical tasks (Tasks 1-7)
+2. **If no evaluation data:** Use qualitative descriptions only, remove figure placeholders
+3. **If diagrams can't be created:** Use text descriptions or reference external sources
+4. **If code can't be cleaned:** Submit as-is with note about duplication
+
+---
+
+## Support Resources
+
+- **Related Documents:**
+  - `MISSING_FIGURES.md` - List of all missing figures
+  - `MISSING_CONTENT.md` - List of content gaps
+  - `FILE_ORGANIZATION.md` - Code reorganization plan
+  - `LATEX_IMPROVEMENTS.md` - LaTeX fix templates
+  - Audit reports in this directory
+
+- **External Resources:**
+  - Google Scholar for citations
+  - Hartley & Zisserman book for geometry
+  - Hugging Face for model documentation
+  - OpenCV documentation for CV pipeline
+
+- **Tools:**
+  - LaTeX: Overleaf, TeXStudio, or VS Code with LaTeX Workshop
+  - Diagrams: draw.io, TikZ, Inkscape
+  - Bibliography: JabRef, Zotero
+  - Python: VS Code, PyCharm
+
+---
+
+## Contact and Questions
+
+**Supervisor:** David Wendorff, M.Sc
+**Institution:** Institute of Assembly Technology and Industrial Robotics, Leibniz University Hannover
+
+---
+
+**Status:** This TODO list is current as of 2025-11-27.
+**Next Review:** After completing Critical tasks
+**Final Deadline:** [INSERT YOUR DEADLINE HERE]
+
+---
+
+## Notes and Progress Tracking
+
+Use this space to track your progress:
 
 ```
-Abgabe.zip
-├── latex/                  # Thesis source
-├── main.pdf               # Compiled thesis (copy to root)
-├── src/                   # Source code
-├── README.md              # Top-level guide
-├── Todo.md                # This file
-└── External_Dependencies.md
-```
+Date: ___________
+Tasks Completed:
+-
+-
+-
 
-### Printed Submission
+Blockers Encountered:
+-
+-
 
-- Print `main.pdf`
-- Include USB stick with full `Abgabe/` directory
-- Or: Upload to university portal
-
-### Git Repository (if allowed)
-
-- Initialize git repo
-- Add `.gitignore`
-- Commit organized structure
-- Tag as `submission-v1.0`
-- Push to GitLab/GitHub (if approved)
-
----
-
-## Contact & References
-
-**Author**: Ahmed Galai
-**Matriculation Number**: 10007404
-**Institution**: Karlsruhe Institute of Technology (KIT)
-**Institute**: Institute for Anthropomatics and Robotics (IAR)
-**Thesis Type**: Master's Thesis
-
-**Supervisors**:
-- (List supervisors as per thesis cover page)
-
-**External Collaborators**:
-- FoundationPose API: [matchcow_pose_api] (referenced in thesis)
-- Streamlit frontend: [matchcow_serp_frontend] (referenced in thesis)
-
----
-
-## Version History
-
-| Date       | Version | Changes                          |
-|------------|---------|----------------------------------|
-| 2025-11-25 | 1.0     | Initial organization complete    |
-| 2025-11-25 | 1.1     | Added platform-specific READMEs  |
-| 2025-11-25 | 1.2     | Created comprehensive Todo.md    |
-
----
-
-## Appendix: Automated Checks
-
-### Quick Validation Script
-
-```bash
-#!/bin/bash
-# validate_submission.sh
-
-echo "=== Abgabe Directory Validation ==="
-
-# Check main components exist
-echo -n "LaTeX source... "
-[ -f "latex/Masterarbeit/main.tex" ] && echo "✓" || echo "✗ MISSING"
-
-echo -n "Compiled PDF... "
-[ -f "latex/Masterarbeit/main.pdf" ] && echo "✓" || echo "⚠ Not compiled"
-
-echo -n "Kubuntu backend... "
-[ -d "src/Kubuntu/backend" ] && echo "✓" || echo "✗ MISSING"
-
-echo -n "MacOS backend... "
-[ -d "src/MacOS/backend" ] && echo "✓" || echo "✗ MISSING"
-
-echo -n "VisionOS app... "
-[ -d "src/VisionOS/visionos" ] && echo "✓" || echo "✗ MISSING"
-
-# Check READMEs
-echo -n "Platform READMEs... "
-COUNT=$(find src -name "README.md" | wc -l)
-echo "$COUNT found"
-
-# Check for build artifacts
-echo -n "Build artifacts... "
-ARTIFACTS=$(find src -name "DerivedData" -o -name "*.xcuserdata" | wc -l)
-[ "$ARTIFACTS" -eq 0 ] && echo "✓ Clean" || echo "⚠ $ARTIFACTS found (should remove)"
-
-# Count source files
-echo "=== Source File Counts ==="
-echo "Python files: $(find src -name "*.py" | wc -l)"
-echo "Swift files: $(find src -name "*.swift" | wc -l)"
-echo "3D models: $(find src -name "*.ply" | wc -l)"
-
-echo ""
-echo "Validation complete. Review any ✗ or ⚠ items above."
-```
-
-Run with:
-```bash
-chmod +x validate_submission.sh
-./validate_submission.sh
+Time Spent: _____ hours
+Remaining: _____ hours
 ```
 
 ---
 
-## Final Notes
-
-This Todo.md serves as:
-1. **Submission checklist** for author
-2. **Navigation guide** for reviewers
-3. **Known issues** documentation
-4. **Future work** tracker
-
-**Last Updated**: November 25, 2025
-**Status**: Ready for final review and compilation
+**Good luck with your thesis completion! 🎓**
