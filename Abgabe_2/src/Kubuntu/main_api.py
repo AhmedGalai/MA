@@ -60,7 +60,10 @@ def initialize_api():
 
     # Load existing calibration if available
     T_world_rs = None
-    extrinsics_path = Path(CONFIG["paths"]["extrinsics"])
+    calibration_file = Path(CONFIG["paths"]["calibration_file"])
+    extrinsics_dir = Path(CONFIG["paths"]["extrinsics_dir"])
+    extrinsics_dir.mkdir(parents=True, exist_ok=True)
+    extrinsics_path = extrinsics_dir
     if extrinsics_path.exists():
         try:
             T_world_rs = load_calibration(str(extrinsics_path))
@@ -215,9 +218,9 @@ def calibrate_rs():
                 return jsonify({'error': 'Failed to compute transformation'}), 400
 
             # Save calibration
-            extrinsics_path = Path(CONFIG["paths"]["extrinsics"])
-            extrinsics_path.parent.mkdir(parents=True, exist_ok=True)
-            save_calibration(str(extrinsics_path), T_world_rs)
+            calibration_file = Path(CONFIG["paths"]["calibration_file"])
+            calibration_file.parent.mkdir(parents=True, exist_ok=True)
+            save_calibration(str(calibration_file), T_world_rs)
 
             # Update CoordinateManager
             if coordinate_manager is not None:
@@ -603,8 +606,8 @@ if __name__ == '__main__':
 
         # Run the Flask server
         app.run(
-            host=CONFIG["network"]["host"],
-            port=CONFIG["network"]["port"],
+            host=CONFIG["network"]["main_api_host"],
+            port=CONFIG["network"]["main_api_port"],
             debug=CONFIG.get("debug", False)
         )
 
