@@ -1,0 +1,23 @@
+# Final Pipeline Requirements (MDE Version)
+
+# Core dependencies
+numpy>=1.21.0
+opencv-python>=4.5.0
+scipy>=1.7.0
+
+# Kalman filtering (optional, can use custom implementation)
+filterpy>=1.4.5
+
+# API server
+flask>=2.0.0
+flask-cors>=3.0.10
+
+# Image processing
+Pillow>=8.0.0
+
+# MDE Model
+torch
+transformers
+
+# Optional: For advanced transformations
+scikit-learn>=0.24.0
