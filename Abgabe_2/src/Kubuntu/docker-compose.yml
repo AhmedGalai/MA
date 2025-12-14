@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  uxplay:
+    build: ./docker/uxplay
+    container_name: uxplay-airplay
+    network_mode: host  # Required for mDNS/Bonjour discovery
+    volumes:
+      - ./frames:/frames:rw
+    restart: unless-stopped
+    environment:
+      - DISPLAY=:0  # Optional, for debugging

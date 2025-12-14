@@ -10,6 +10,7 @@ import logging
 import os
 import threading
 import base64
+import time
 from pathlib import Path
 
 import cv2
@@ -39,6 +40,10 @@ CORS(app)
 realsense_client = None
 coordinate_manager = None
 state_lock = threading.Lock()
+
+# UxPlay frame storage
+last_avp_frame = None
+last_avp_frame_timestamp = None
 
 
 def initialize_api():
@@ -442,6 +447,114 @@ def estimate_pose_endpoint():
     except Exception as e:
         logger.error(f"Error in pose estimation endpoint: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/receive_frame', methods=['POST'])
+def receive_frame():
+    """
+    Receive RGB frame from UxPlay capture service.
+
+    Expected JSON:
+        {
+            "rgb_frame": "data:image/jpeg;base64,...",
+            "purpose": "aruco_calibration" | "roi_selection" | "general"
+        }
+
+    Stores frame in global state for later use.
+
+    Returns:
+        JSON with success status
+    """
+    global last_avp_frame, last_avp_frame_timestamp
+
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({'error': 'No JSON data provided'}), 400
+
+        # Get frame
+        frame_b64 = data.get('rgb_frame', '')
+        if not frame_b64:
+            return jsonify({'error': 'Missing rgb_frame'}), 400
+
+        # Handle data URL format
+        if ',' in frame_b64:
+            frame_b64 = frame_b64.split(',')[1]
+
+        try:
+            frame_bytes = base64.b64decode(frame_b64)
+            frame_np = cv2.imdecode(
+                np.frombuffer(frame_bytes, np.uint8),
+                cv2.IMREAD_COLOR
+            )
+
+            if frame_np is None:
+                return jsonify({'error': 'Failed to decode frame'}), 400
+
+        except Exception as e:
+            logger.error(f"Error decoding frame: {e}")
+            return jsonify({'error': f'Failed to decode frame: {e}'}), 400
+
+        # Store frame
+        with state_lock:
+            last_avp_frame = frame_np
+            last_avp_frame_timestamp = time.time()
+
+        # Get purpose (for logging)
+        purpose = data.get('purpose', 'general')
+        logger.info(f"Frame received for purpose: {purpose}, shape: {frame_np.shape}")
+
+        return jsonify({'success': True}), 200
+
+    except Exception as e:
+        logger.error(f"Error receiving frame: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/capture_frame', methods=['POST'])
+def trigger_frame_capture():
+    """
+    Trigger UxPlay frame capture.
+
+    Query parameters:
+        purpose: "aruco_calibration" | "roi_selection" | "general"
+
+    Process:
+        1. Calls uxplay_capture.py to capture latest frame
+        2. Frame is sent to /receive_frame endpoint
+        3. Stored in global state
+
+    Returns:
+        JSON with success status
+    """
+    purpose = request.args.get('purpose', 'general')
+
+    try:
+        from uxplay_capture import UxPlayCapture
+        capture = UxPlayCapture()
+
+        success = capture.capture_and_send(purpose=purpose)
+
+        if success:
+            logger.info(f"Frame captured for {purpose}")
+            return jsonify({
+                "success": True,
+                "message": f"Frame captured for {purpose}"
+            }), 200
+        else:
+            logger.error(f"Frame capture failed for {purpose}")
+            return jsonify({
+                "success": False,
+                "error": "Frame capture failed"
+            }), 500
+
+    except Exception as e:
+        logger.error(f"Error triggering frame capture: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 
 @app.errorhandler(400)

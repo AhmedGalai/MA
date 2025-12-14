@@ -225,6 +225,45 @@ class DebugViewer:
         self.refresh_label = ttk.Label(right_control, text="2.0 Hz", width=6)
         self.refresh_label.pack(side=tk.LEFT, padx=5)
 
+        # UxPlay Capture section
+        capture_frame = ttk.LabelFrame(main_frame, text="UxPlay Frame Capture", padding=10)
+        capture_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        # Capture buttons
+        capture_buttons = ttk.Frame(capture_frame)
+        capture_buttons.pack(side=tk.LEFT, padx=5)
+
+        self.capture_aruco_btn = ttk.Button(
+            capture_buttons,
+            text="Capture for ArUco Calibration",
+            command=self._capture_for_aruco,
+            width=25
+        )
+        self.capture_aruco_btn.pack(side=tk.LEFT, padx=5)
+
+        self.capture_roi_btn = ttk.Button(
+            capture_buttons,
+            text="Capture for ROI Selection",
+            command=self._capture_for_roi,
+            width=25
+        )
+        self.capture_roi_btn.pack(side=tk.LEFT, padx=5)
+
+        # Status display
+        capture_status_frame = ttk.Frame(capture_frame)
+        capture_status_frame.pack(side=tk.RIGHT, padx=5)
+
+        ttk.Label(capture_status_frame, text="Status:").pack(side=tk.LEFT, padx=5)
+
+        self.capture_status_var = tk.StringVar(value="Ready")
+        self.capture_status_label = ttk.Label(
+            capture_status_frame,
+            textvariable=self.capture_status_var,
+            font=("Arial", 9, "italic"),
+            foreground="gray"
+        )
+        self.capture_status_label.pack(side=tk.LEFT, padx=5)
+
     def _create_image_panel(self, parent, title: str, row: int, col: int) -> Dict:
         """
         Create an image display panel.
@@ -658,6 +697,88 @@ class DebugViewer:
         }
         self._update_stats_panel()
         logger.info("Statistics cleared")
+
+    def _capture_for_aruco(self):
+        """Capture frame from UxPlay for ArUco calibration."""
+        self.capture_status_var.set("Capturing for ArUco...")
+        self.capture_status_label.config(foreground="blue")
+        logger.info("Capturing frame for ArUco calibration")
+
+        # Run capture in background thread to avoid blocking GUI
+        def capture_thread():
+            try:
+                response = requests.post(
+                    f"{self.api_url}/capture_frame?purpose=aruco_calibration",
+                    timeout=5
+                )
+
+                if response.status_code == 200:
+                    self.capture_status_var.set("✓ ArUco frame captured")
+                    self.capture_status_label.config(foreground="green")
+                    logger.info("ArUco frame captured successfully")
+                else:
+                    error_msg = response.json().get('error', 'Unknown error')
+                    self.capture_status_var.set(f"✗ Capture failed: {error_msg}")
+                    self.capture_status_label.config(foreground="red")
+                    logger.error(f"ArUco capture failed: {error_msg}")
+
+            except requests.exceptions.Timeout:
+                self.capture_status_var.set("✗ Capture timeout")
+                self.capture_status_label.config(foreground="red")
+                logger.error("ArUco capture timed out")
+
+            except requests.exceptions.ConnectionError:
+                self.capture_status_var.set("✗ Connection error")
+                self.capture_status_label.config(foreground="red")
+                logger.error("ArUco capture connection error")
+
+            except Exception as e:
+                self.capture_status_var.set(f"✗ Error: {str(e)[:30]}")
+                self.capture_status_label.config(foreground="red")
+                logger.error(f"ArUco capture error: {e}")
+
+        threading.Thread(target=capture_thread, daemon=True).start()
+
+    def _capture_for_roi(self):
+        """Capture frame from UxPlay for ROI selection."""
+        self.capture_status_var.set("Capturing for ROI...")
+        self.capture_status_label.config(foreground="blue")
+        logger.info("Capturing frame for ROI selection")
+
+        # Run capture in background thread to avoid blocking GUI
+        def capture_thread():
+            try:
+                response = requests.post(
+                    f"{self.api_url}/capture_frame?purpose=roi_selection",
+                    timeout=5
+                )
+
+                if response.status_code == 200:
+                    self.capture_status_var.set("✓ ROI frame captured")
+                    self.capture_status_label.config(foreground="green")
+                    logger.info("ROI frame captured successfully")
+                else:
+                    error_msg = response.json().get('error', 'Unknown error')
+                    self.capture_status_var.set(f"✗ Capture failed: {error_msg}")
+                    self.capture_status_label.config(foreground="red")
+                    logger.error(f"ROI capture failed: {error_msg}")
+
+            except requests.exceptions.Timeout:
+                self.capture_status_var.set("✗ Capture timeout")
+                self.capture_status_label.config(foreground="red")
+                logger.error("ROI capture timed out")
+
+            except requests.exceptions.ConnectionError:
+                self.capture_status_var.set("✗ Connection error")
+                self.capture_status_label.config(foreground="red")
+                logger.error("ROI capture connection error")
+
+            except Exception as e:
+                self.capture_status_var.set(f"✗ Error: {str(e)[:30]}")
+                self.capture_status_label.config(foreground="red")
+                logger.error(f"ROI capture error: {e}")
+
+        threading.Thread(target=capture_thread, daemon=True).start()
 
     def on_closing(self):
         """Handle window close event."""

@@ -33,8 +33,18 @@ Abgabe_2/
 │   │   ├── coordinate_manager.py
 │   │   ├── mask_transformer.py
 │   │   ├── foundationpose_client.py
+│   │   ├── uxplay_capture.py # UxPlay frame capture service
+│   │   ├── debug_viewer.py   # Visual debugging GUI
+│   │   ├── docker/           # Docker configuration
+│   │   │   └── uxplay/
+│   │   │       ├── Dockerfile
+│   │   │       └── start-uxplay.sh
+│   │   ├── docker-compose.yml
+│   │   ├── start_uxplay.sh   # Convenience scripts
+│   │   ├── stop_uxplay.sh
 │   │   ├── models/           # .ply 3D models
 │   │   ├── extrinsics/       # Calibration data
+│   │   ├── frames/           # UxPlay frame output
 │   │   └── requirements.txt
 │   │
 │   └── VisionOS/            # Apple Vision Pro app
@@ -59,7 +69,59 @@ python main_api.py
 
 Server will run at `http://0.0.0.0:8000`
 
-### 2. Calibration
+### 2. UxPlay Setup (AirPlay Mirror Receiver)
+
+UxPlay runs in a Docker container to receive AirPlay mirroring from VisionOS and provide frames to the backend.
+
+```bash
+cd src/Kubuntu
+
+# Start UxPlay Docker container
+./start_uxplay.sh
+```
+
+This will:
+1. Build the UxPlay Docker image (if needed)
+2. Start the container with AirPlay server
+3. Create `./frames/` directory
+4. Continuously write latest frame to `./frames/latest.jpg`
+
+**On VisionOS/iOS device**:
+- Open Control Center
+- Tap Screen Mirroring
+- Select "Kubuntu Backend"
+
+**Frame Capture**:
+- Use Debug Viewer buttons: "Capture for ArUco Calibration" or "Capture for ROI Selection"
+- Or use VisionOS app capture buttons (see VisionOS modifications in COMPLETION_REPORT.md)
+- Frames are captured on-demand, not continuously streamed
+
+**Stop UxPlay**:
+```bash
+./stop_uxplay.sh
+```
+
+**Troubleshooting**:
+- Check UxPlay logs: `docker-compose logs -f uxplay`
+- Verify frames are updating: `ls -lh frames/latest.jpg`
+- Ensure devices are on same network (AirPlay requires mDNS/Bonjour)
+
+### 3. Debug Viewer (Optional)
+
+Launch the visual debugging tool:
+
+```bash
+python debug_viewer.py
+```
+
+Features:
+- Real-time system status monitoring
+- RealSense camera feed display
+- Pose visualization
+- Statistics tracking
+- **UxPlay frame capture buttons**
+
+### 4. Calibration
 
 #### a) Calibrate RealSense Camera
 ```bash
@@ -98,6 +160,14 @@ curl -X POST http://localhost:8000/calibrate_avp \
 ### Head Pose
 - `POST /head_pose` - Stream head pose for drift correction
   - Input: `{position, quaternion, timestamp}`
+
+### Frame Capture (UxPlay)
+- `POST /capture_frame?purpose=<purpose>` - Trigger UxPlay frame capture
+  - Purpose: `aruco_calibration`, `roi_selection`, or `general`
+  - Captures latest frame from UxPlay and stores it
+- `POST /receive_frame` - Receive frame from uxplay_capture.py
+  - Input: `{rgb_frame: <base64>, purpose: <string>}`
+  - Stores frame in backend for later use
 
 ### Utilities
 - `GET /health` - Check system status
@@ -142,6 +212,7 @@ Compared to the original pipeline:
 
 ### Software
 - Python 3.8+
+- Docker & docker-compose (for UxPlay container)
 - Xcode 15.0+ (for VisionOS app)
 - FoundationPose API running on port 5000
 

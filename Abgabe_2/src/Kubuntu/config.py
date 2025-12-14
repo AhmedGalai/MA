@@ -61,6 +61,20 @@ CONFIG = {
     },
 
     # =========================================================================
+    # UxPlay Configuration (Docker-based AirPlay receiver)
+    # =========================================================================
+    "uxplay": {
+        "enabled": True,
+        "frame_dir": os.path.join(os.path.dirname(__file__), "frames"),
+        "docker_compose_file": os.path.join(
+            os.path.dirname(__file__),
+            "docker-compose.yml"
+        ),
+        "device_name": "Kubuntu Backend",
+        "max_frame_age": 2.0,  # seconds - max age for frame to be considered valid
+    },
+
+    # =========================================================================
     # Processing Parameters
     # =========================================================================
     "processing": {
