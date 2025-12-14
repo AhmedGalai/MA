@@ -60,13 +60,17 @@ def initialize_api():
 
     # Load existing calibration if available
     T_world_rs = None
-    extrinsics_path = Path(CONFIG["paths"]["extrinsics"])
-    if extrinsics_path.exists():
+    calibration_file = Path(CONFIG["paths"]["calibration_file"])
+    if calibration_file.exists():
         try:
-            T_world_rs = load_calibration(str(extrinsics_path))
-            logger.info("Loaded T_world_rs from extrinsics")
+            T_world_rs = load_calibration(str(calibration_file))
+            logger.info(f"Loaded T_world_rs from {calibration_file}")
         except Exception as e:
             logger.warning(f"Failed to load T_world_rs: {e}")
+
+    # Create extrinsics directory if it doesn't exist
+    extrinsics_dir = Path(CONFIG["paths"]["extrinsics_dir"])
+    extrinsics_dir.mkdir(parents=True, exist_ok=True)
 
     # Initialize RealSenseClient
     try:
@@ -215,9 +219,9 @@ def calibrate_rs():
                 return jsonify({'error': 'Failed to compute transformation'}), 400
 
             # Save calibration
-            extrinsics_path = Path(CONFIG["paths"]["extrinsics"])
-            extrinsics_path.parent.mkdir(parents=True, exist_ok=True)
-            save_calibration(str(extrinsics_path), T_world_rs)
+            calibration_file = Path(CONFIG["paths"]["calibration_file"])
+            calibration_file.parent.mkdir(parents=True, exist_ok=True)
+            save_calibration(str(calibration_file), T_world_rs)
 
             # Update CoordinateManager
             if coordinate_manager is not None:

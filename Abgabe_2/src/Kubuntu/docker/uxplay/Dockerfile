@@ -33,9 +33,24 @@ RUN git clone https://github.com/FDH2/UxPlay.git && \
 # Create output directory
 RUN mkdir -p /frames
 
-# Startup script
-COPY start-uxplay.sh /start-uxplay.sh
-RUN chmod +x /start-uxplay.sh
+# Create startup script directly in Dockerfile (avoids line ending issues)
+RUN echo '#!/bin/bash' > /start-uxplay.sh && \
+    echo '' >> /start-uxplay.sh && \
+    echo '# GStreamer pipeline: write frames to shared directory' >> /start-uxplay.sh && \
+    echo '# videorate ensures constant frame rate' >> /start-uxplay.sh && \
+    echo '# multifilesink overwrites same file (latest.jpg)' >> /start-uxplay.sh && \
+    echo 'VIDEOSINK="videorate ! video/x-raw,framerate=30/1 ! videoconvert ! jpegenc quality=90 ! multifilesink location=/frames/latest.jpg max-files=1"' >> /start-uxplay.sh && \
+    echo '' >> /start-uxplay.sh && \
+    echo 'echo "Starting UxPlay with GStreamer output to /frames/latest.jpg"' >> /start-uxplay.sh && \
+    echo 'echo "Device name: Kubuntu Backend"' >> /start-uxplay.sh && \
+    echo 'echo "Waiting for AirPlay connection..."' >> /start-uxplay.sh && \
+    echo '' >> /start-uxplay.sh && \
+    echo 'uxplay -n "Kubuntu Backend" \' >> /start-uxplay.sh && \
+    echo '       -vs "$VIDEOSINK" \' >> /start-uxplay.sh && \
+    echo '       -reset 3 \' >> /start-uxplay.sh && \
+    echo '       -vsync no \' >> /start-uxplay.sh && \
+    echo '       -fps 30' >> /start-uxplay.sh && \
+    chmod +x /start-uxplay.sh
 
 EXPOSE 7000 7001 7100
 

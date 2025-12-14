@@ -165,6 +165,16 @@ docker-compose --version
 docker-compose logs -f uxplay
 ```
 
+**Common issue: "exec /start-uxplay.sh: no such file or directory"**
+- This is caused by Windows line endings (CRLF vs LF)
+- **Solution**: The Dockerfile includes `dos2unix` to automatically fix this
+- If you still see this error, rebuild without cache:
+  ```bash
+  docker-compose down
+  docker-compose build --no-cache uxplay
+  docker-compose up -d uxplay
+  ```
+
 ### Device can't find "Kubuntu Backend"
 - Ensure both devices on same network
 - Check firewall allows ports 7000, 7001, 7100
