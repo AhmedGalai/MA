@@ -118,6 +118,52 @@ def health():
     }), 200
 
 
+@app.route('/get_rgbd_frame', methods=['GET'])
+def get_rgbd_frame():
+    """
+    Get current RGBD frame from RealSense camera.
+
+    Returns:
+        JSON with base64-encoded RGB and depth images:
+        {
+            "rgb": "data:image/jpeg;base64,...",
+            "depth": "data:image/jpeg;base64,...",
+            "timestamp": float
+        }
+    """
+    try:
+        with state_lock:
+            if realsense_client is None or not realsense_client.is_running:
+                return jsonify({'error': 'RealSense not connected'}), 503
+
+            # Capture frame
+            rgb, depth, K = realsense_client.get_frame()
+            if rgb is None or depth is None:
+                return jsonify({'error': 'Failed to capture frame'}), 500
+
+        # Convert RGB to JPEG
+        _, rgb_buffer = cv2.imencode('.jpg', cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR),
+                                      [cv2.IMWRITE_JPEG_QUALITY, 85])
+        rgb_b64 = base64.b64encode(rgb_buffer).decode('utf-8')
+
+        # Convert depth to colormap for visualization
+        depth_normalized = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+        depth_colormap = cv2.applyColorMap(depth_normalized, cv2.COLORMAP_JET)
+        _, depth_buffer = cv2.imencode('.jpg', depth_colormap,
+                                        [cv2.IMWRITE_JPEG_QUALITY, 85])
+        depth_b64 = base64.b64encode(depth_buffer).decode('utf-8')
+
+        return jsonify({
+            'rgb': f'data:image/jpeg;base64,{rgb_b64}',
+            'depth': f'data:image/jpeg;base64,{depth_b64}',
+            'timestamp': time.time()
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting RGBD frame: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/models', methods=['GET'])
 def models():
     """

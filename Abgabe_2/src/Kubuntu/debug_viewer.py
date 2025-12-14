@@ -20,6 +20,7 @@ import requests
 import logging
 import numpy as np
 import cv2
+import base64
 from PIL import Image, ImageTk
 from datetime import datetime
 from typing import Optional, Dict, Any
@@ -407,8 +408,10 @@ class DebugViewer:
         """
         Main update loop that fetches data and updates all panels.
 
-        Fetches status from /health endpoint and updates:
+        Fetches status from /health endpoint and RGBD frames from /get_rgbd_frame.
+        Updates:
         - System status panel
+        - RGB and Depth image panels
         - Statistics
         - Display refresh timestamp
         """
@@ -422,6 +425,12 @@ class DebugViewer:
                 self.cached_data['last_fetch_time'] = datetime.now()
                 self._update_status_text_panel()
                 self.stats['total_frames'] += 1
+
+                # Fetch and display RGBD frames if RealSense is connected
+                if status.get('rs_connected', False):
+                    rgbd_data = self.fetch_rgbd_frame()
+                    if rgbd_data is not None:
+                        self._update_rgbd_panels(rgbd_data)
 
                 # Track timing
                 elapsed = (datetime.now() - start_time).total_seconds()
@@ -454,6 +463,34 @@ class DebugViewer:
             return None
         except Exception as e:
             logger.error(f"Error fetching status: {e}")
+            return None
+
+    def fetch_rgbd_frame(self) -> Optional[Dict[str, Any]]:
+        """
+        Fetch RGBD frame from /get_rgbd_frame endpoint.
+
+        Returns:
+            dict: Frame data with 'rgb' and 'depth' base64-encoded images
+            None: If request fails
+        """
+        try:
+            response = requests.get(
+                f"{self.api_url}/get_rgbd_frame",
+                timeout=3
+            )
+            if response.status_code == 200:
+                return response.json()
+            else:
+                # Don't log warnings if RealSense is not connected (503)
+                if response.status_code != 503:
+                    logger.warning(f"RGBD frame fetch returned {response.status_code}")
+                return None
+
+        except requests.exceptions.Timeout:
+            logger.warning("RGBD frame request timed out")
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching RGBD frame: {e}")
             return None
 
     def _update_status_text_panel(self):
@@ -493,6 +530,51 @@ class DebugViewer:
             text_content += "\n[Calibration]\nPending calibration\n"
 
         self._update_text_widget(self.panel_status['text'], text_content)
+
+    def _update_rgbd_panels(self, rgbd_data: Dict[str, Any]):
+        """
+        Update RGB and Depth image panels.
+
+        Args:
+            rgbd_data (dict): Dictionary containing 'rgb' and 'depth' base64-encoded images
+        """
+        try:
+            # Decode and display RGB image
+            if 'rgb' in rgbd_data:
+                rgb_b64 = rgbd_data['rgb']
+                # Remove data URL prefix if present
+                if ',' in rgb_b64:
+                    rgb_b64 = rgb_b64.split(',')[1]
+
+                # Decode base64 to image
+                rgb_bytes = base64.b64decode(rgb_b64)
+                rgb_np = np.frombuffer(rgb_bytes, np.uint8)
+                rgb_image = cv2.imdecode(rgb_np, cv2.IMREAD_COLOR)
+
+                if rgb_image is not None:
+                    # Convert BGR to RGB for display
+                    rgb_image = cv2.cvtColor(rgb_image, cv2.COLOR_BGR2RGB)
+                    self._update_image_panel(self.panel_rgb, rgb_image)
+
+            # Decode and display Depth colormap
+            if 'depth' in rgbd_data:
+                depth_b64 = rgbd_data['depth']
+                # Remove data URL prefix if present
+                if ',' in depth_b64:
+                    depth_b64 = depth_b64.split(',')[1]
+
+                # Decode base64 to image
+                depth_bytes = base64.b64decode(depth_b64)
+                depth_np = np.frombuffer(depth_bytes, np.uint8)
+                depth_image = cv2.imdecode(depth_np, cv2.IMREAD_COLOR)
+
+                if depth_image is not None:
+                    # Convert BGR to RGB for display
+                    depth_image = cv2.cvtColor(depth_image, cv2.COLOR_BGR2RGB)
+                    self._update_image_panel(self.panel_depth, depth_image)
+
+        except Exception as e:
+            logger.error(f"Error updating RGBD panels: {e}")
 
     def _update_poses_panel(self, poses_data: Dict[str, Any]):
         """
