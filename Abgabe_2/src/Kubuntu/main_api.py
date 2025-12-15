@@ -61,14 +61,11 @@ def initialize_api():
     # Load existing calibration if available
     T_world_rs = None
     calibration_file = Path(CONFIG["paths"]["calibration_file"])
-<<<<<<< HEAD
+
     extrinsics_dir = Path(CONFIG["paths"]["extrinsics_dir"])
     extrinsics_dir.mkdir(parents=True, exist_ok=True)
     extrinsics_path = extrinsics_dir
     if extrinsics_path.exists():
-=======
-    if calibration_file.exists():
->>>>>>> 2bd9dcdf6ac07f1eb9fc1d2f0b9e025550e16536
         try:
             T_world_rs = load_calibration(str(calibration_file))
             logger.info(f"Loaded T_world_rs from {calibration_file}")
