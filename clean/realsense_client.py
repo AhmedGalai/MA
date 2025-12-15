@@ -97,6 +97,15 @@ class RealSenseClient:
             ], dtype=np.float32)
 
             self.is_running = True
+
+            # Warm up the camera by discarding initial frames
+            logger.info("Warming up camera...")
+            for i in range(30):  # Skip first 30 frames (~1 second at 30fps)
+                try:
+                    self.pipeline.wait_for_frames(timeout_ms=2000)
+                except RuntimeError:
+                    logger.warning(f"Warm-up frame {i+1}/30 timeout")
+
             logger.info("RealSense pipeline started successfully")
             return True
 
@@ -145,8 +154,8 @@ class RealSenseClient:
             return None
 
         try:
-            # Wait for a coherent pair of frames with 1000ms timeout
-            frames = self.pipeline.wait_for_frames(timeout_ms=1000)
+            # Wait for a coherent pair of frames with 5000ms timeout
+            frames = self.pipeline.wait_for_frames(timeout_ms=5000)
 
             # Align depth to color frame
             aligned_frames = self.align.process(frames)
