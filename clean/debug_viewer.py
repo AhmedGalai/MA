@@ -26,6 +26,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 import json
 from pathlib import Path
+import time
 
 # Try to import config, fall back to defaults if not available
 try:
@@ -423,13 +424,14 @@ class DebugViewer:
         """Background thread loop that polls API at configured rate."""
         while self.is_connected and not self.should_stop:
             try:
-                self.update_display()
+                # Schedule GUI update on main thread for thread safety
+                self.root.after(0, self.update_display)
             except Exception as e:
                 logger.error(f"Error in polling loop: {e}")
 
-            # Sleep based on refresh rate
+            # Sleep based on refresh rate - use time.sleep() not root.after()
             sleep_time = 1.0 / self.update_rate_hz
-            self.root.after(int(sleep_time * 1000), lambda: None)
+            time.sleep(sleep_time)
 
     def manual_refresh(self):
         """Manually trigger a display update."""
@@ -1149,6 +1151,7 @@ class DebugViewer:
 
             # Force canvas to update/redraw
             canvas.update_idletasks()
+            canvas.update()  # Force immediate redraw
 
         except Exception as e:
             logger.error(f"Error displaying image on {panel['title']}: {e}")
