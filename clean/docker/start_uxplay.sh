@@ -5,17 +5,24 @@ echo "========================================="
 echo "UxPlay Container Starting"
 echo "========================================="
 
-# Start UxPlay in background with video output to stdout
+# Start UxPlay in background with video output
 # -n: Server name visible on network
-# -vs: Video sink (use autovideosink or appsink for capture)
+# -vs: Video sink (use autovideosink for automatic selection, or fakesink to just advertise)
+# -fps 30: Target frame rate
 echo "Starting UxPlay server..."
-uxplay -n "PoseAPI" -vs "appsink" &
+echo "Note: Using fakesink to focus on network discovery first"
+
+# Use stdbuf to disable output buffering so we see logs immediately
+stdbuf -oL -eL uxplay -n "PoseAPI" -vs fakesink -fps 30 -v 2>&1 &
 
 UXPLAY_PID=$!
 echo "UxPlay started with PID: $UXPLAY_PID"
 
-# Wait a moment for UxPlay to initialize
-sleep 3
+# Wait for UxPlay to initialize and show output
+sleep 5
+echo ""
+echo "UxPlay should now be advertising on the network..."
+echo "If you cannot see it, mDNS/Bonjour may not work from Docker on Windows"
 
 # Start frame capture and forwarding service
 echo "Starting frame capture service..."
