@@ -130,12 +130,16 @@ def get_rgbd_frame():
                 return jsonify({'error': 'RealSense not connected'}), 503
 
             # Capture frame
-            rgb, depth, K = realsense_client.get_frame()
-            if rgb is None or depth is None:
+            frame_data = realsense_client.capture()
+            if frame_data is None:
                 return jsonify({'error': 'Failed to capture frame'}), 500
 
-        # Convert RGB to JPEG
-        _, rgb_buffer = cv2.imencode('.jpg', cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR),
+            rgb = frame_data['rgb']
+            depth = frame_data['depth']
+            K = frame_data['K']
+
+        # Convert BGR to JPEG (RealSense returns BGR format)
+        _, rgb_buffer = cv2.imencode('.jpg', rgb,
                                       [cv2.IMWRITE_JPEG_QUALITY, 85])
         rgb_b64 = base64.b64encode(rgb_buffer).decode('utf-8')
 
@@ -249,9 +253,13 @@ def calibrate_rs():
                 return jsonify({'error': 'RealSenseClient not available'}), 500
 
             # Capture frame
-            rgb, depth, K = realsense_client.get_frame()
-            if rgb is None:
+            frame_data = realsense_client.capture()
+            if frame_data is None:
                 return jsonify({'error': 'Failed to capture RealSense frame'}), 500
+
+            rgb = frame_data['rgb']
+            depth = frame_data['depth']
+            K = frame_data['K']
 
             # Detect ArUco board
             result = detect_aruco_board(rgb)
@@ -437,9 +445,13 @@ def estimate_pose_endpoint():
                 return jsonify({'error': f'Failed to transform mask: {e}'}), 500
 
             # Capture RealSense frame
-            rgb_rs, depth_rs, K_rs = realsense_client.get_frame()
-            if rgb_rs is None:
+            frame_data = realsense_client.capture()
+            if frame_data is None:
                 return jsonify({'error': 'Failed to capture RealSense frame'}), 500
+
+            rgb_rs = frame_data['rgb']
+            depth_rs = frame_data['depth']
+            K_rs = frame_data['K']
 
             # Estimate pose in RS view
             try:
