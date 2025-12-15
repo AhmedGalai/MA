@@ -4,16 +4,20 @@ services:
       context: ./docker
       dockerfile: Dockerfile.uxplay
     container_name: uxplay_avp
-    network_mode: "bridge"
-    ports:
-      - "7000:7000"       # AirPlay control (TCP)
-      - "7001:7001"       # AirPlay data (TCP)
-      - "7100:7100"       # AirPlay mirror (TCP)
-      - "6000:6000/udp"   # AirPlay audio RAOP (UDP)
-      - "6001:6001/udp"   # AirPlay audio timing (UDP)
-      # Note: mDNS port 5353 removed - doesn't work from Docker on Windows
-    environment:
-      - API_HOST=host.docker.internal
-      - API_PORT=8000
+    network_mode: "host"
     restart: unless-stopped
-    privileged: false
+
+    # Use host daemons
+    volumes:
+      - /var/run/dbus:/var/run/dbus
+      - /run/avahi-daemon/socket:/run/avahi-daemon/socket
+      - /run:/run
+
+    environment:
+      - API_HOST=127.0.0.1
+      - API_PORT=8000
+
+    # Avahi sometimes needs these; if it still won’t advertise, try privileged: true instead.
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
