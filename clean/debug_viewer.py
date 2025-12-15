@@ -149,9 +149,45 @@ class DebugViewer:
         # Divider
         ttk.Separator(main_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
 
-        # Content area - 3x3 grid of panels
-        content_frame = ttk.Frame(main_frame)
-        content_frame.pack(fill=tk.BOTH, expand=True)
+        # Create scrollable content area
+        # Canvas with scrollbar for 3x3 grid
+        canvas_container = ttk.Frame(main_frame)
+        canvas_container.pack(fill=tk.BOTH, expand=True)
+
+        # Create canvas and scrollbar
+        canvas = tk.Canvas(canvas_container)
+        scrollbar = ttk.Scrollbar(canvas_container, orient=tk.VERTICAL, command=canvas.yview)
+
+        # Content frame inside canvas
+        content_frame = ttk.Frame(canvas)
+
+        # Configure canvas
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        # Pack scrollbar and canvas
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Create window in canvas
+        canvas_window = canvas.create_window((0, 0), window=content_frame, anchor=tk.NW)
+
+        # Configure content frame to update scroll region
+        def configure_scroll_region(event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        content_frame.bind("<Configure>", configure_scroll_region)
+
+        # Bind mousewheel for scrolling
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+
+        canvas.bind_all("<MouseWheel>", on_mousewheel)
+
+        # Update canvas window width when canvas is resized
+        def configure_canvas_width(event):
+            canvas.itemconfig(canvas_window, width=event.width)
+
+        canvas.bind("<Configure>", configure_canvas_width)
 
         # Configure grid weights for equal distribution
         for i in range(3):

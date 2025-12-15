@@ -35,6 +35,7 @@ CONFIG = {
         "cols": 4,
         "marker_size_m": 0.030,          # 30mm
         "marker_separation_m": 0.010,    # 10mm
+        "separation_m": 0.010,           # 10mm (alias for marker_separation_m)
     },
 
     # =========================================================================
@@ -85,7 +86,7 @@ CONFIG = {
             os.path.dirname(__file__),
             "docker-compose.yml"
         ),
-        "device_name": "Kubuntu Backend",
+        "device_name": "PoseAPI",
         "max_frame_age": 2.0,  # seconds - max age for frame to be considered valid
     },
 

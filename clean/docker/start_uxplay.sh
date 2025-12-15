@@ -9,7 +9,7 @@ echo "========================================="
 # -n: Server name visible on network
 # -vs: Video sink (use autovideosink or appsink for capture)
 echo "Starting UxPlay server..."
-uxplay -n "Kubuntu Backend" -vs "appsink" &
+uxplay -n "PoseAPI" -vs "appsink" &
 
 UXPLAY_PID=$!
 echo "UxPlay started with PID: $UXPLAY_PID"
@@ -32,7 +32,7 @@ echo "  UxPlay PID: $UXPLAY_PID"
 echo "  Capture PID: $CAPTURE_PID"
 echo "========================================="
 echo ""
-echo "Connect your visionOS device to 'Kubuntu Backend'"
+echo "Connect your visionOS device to 'PoseAPI'"
 echo "Press Ctrl+C to stop"
 echo ""
 
