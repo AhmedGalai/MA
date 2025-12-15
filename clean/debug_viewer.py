@@ -104,6 +104,13 @@ class DebugViewer:
             'aruco_image': None,
             'aruco_markers': 0,
             'aruco_ids': [],
+            'avp_rgb_image': None,
+            'avp_aruco_image': None,
+            'avp_timestamp': None,
+            'avp_age': None,
+            'intrinsics_rs': None,
+            'intrinsics_avp': None,
+            'transformation': None,
             'last_fetch_time': None
         }
 
@@ -142,36 +149,47 @@ class DebugViewer:
         # Divider
         ttk.Separator(main_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
 
-        # Content area - 2x3 grid of panels
+        # Content area - 3x3 grid of panels
         content_frame = ttk.Frame(main_frame)
         content_frame.pack(fill=tk.BOTH, expand=True)
 
         # Configure grid weights for equal distribution
-        for i in range(2):
+        for i in range(3):
             content_frame.grid_rowconfigure(i, weight=1)
         for j in range(3):
             content_frame.grid_columnconfigure(j, weight=1)
 
-        # Create image panels (top row)
+        # Create image panels (row 0: RealSense)
         self.panel_rgb = self._create_image_panel(
             content_frame, "RealSense RGB", 0, 0
         )
         self.panel_aruco = self._create_image_panel(
-            content_frame, "ArUco Detection", 0, 1
+            content_frame, "RS ArUco Detection", 0, 1
         )
         self.panel_depth = self._create_image_panel(
             content_frame, "RealSense Depth", 0, 2
         )
 
-        # Create text panels (bottom row)
-        self.panel_status = self._create_text_panel(
-            content_frame, "System Status", 1, 0
+        # Create image panels (row 1: AVP)
+        self.panel_avp_rgb = self._create_image_panel(
+            content_frame, "AVP RGB", 1, 0
         )
-        self.panel_poses = self._create_text_panel(
-            content_frame, "Latest Poses", 1, 1
+        self.panel_avp_aruco = self._create_image_panel(
+            content_frame, "AVP ArUco Detection", 1, 1
+        )
+        self.panel_intrinsics = self._create_text_panel(
+            content_frame, "Camera Intrinsics", 1, 2
+        )
+
+        # Create text panels (row 2: Status & Info)
+        self.panel_status = self._create_text_panel(
+            content_frame, "System Status", 2, 0
+        )
+        self.panel_transformation = self._create_text_panel(
+            content_frame, "Coordinate Transformation", 2, 1
         )
         self.panel_stats = self._create_text_panel(
-            content_frame, "Statistics", 1, 2
+            content_frame, "Statistics", 2, 2
         )
 
         # Divider
@@ -228,44 +246,58 @@ class DebugViewer:
         self.refresh_label = ttk.Label(right_control, text="2.0 Hz", width=6)
         self.refresh_label.pack(side=tk.LEFT, padx=5)
 
-        # UxPlay Capture section
-        capture_frame = ttk.LabelFrame(main_frame, text="UxPlay Frame Capture", padding=10)
-        capture_frame.pack(fill=tk.X, padx=5, pady=5)
+        # AVP Controls section
+        avp_frame = ttk.LabelFrame(main_frame, text="AVP (Apple Vision Pro) Controls", padding=10)
+        avp_frame.pack(fill=tk.X, padx=5, pady=5)
 
-        # Capture buttons
-        capture_buttons = ttk.Frame(capture_frame)
-        capture_buttons.pack(side=tk.LEFT, padx=5)
+        # AVP buttons
+        avp_buttons = ttk.Frame(avp_frame)
+        avp_buttons.pack(side=tk.LEFT, padx=5)
 
-        self.capture_aruco_btn = ttk.Button(
-            capture_buttons,
-            text="Capture for ArUco Calibration",
-            command=self._capture_for_aruco,
-            width=25
+        self.fetch_avp_btn = ttk.Button(
+            avp_buttons,
+            text="Fetch AVP Frame",
+            command=self._fetch_avp_frame,
+            width=20
         )
-        self.capture_aruco_btn.pack(side=tk.LEFT, padx=5)
+        self.fetch_avp_btn.pack(side=tk.LEFT, padx=5)
 
-        self.capture_roi_btn = ttk.Button(
-            capture_buttons,
-            text="Capture for ROI Selection",
-            command=self._capture_for_roi,
-            width=25
+        self.auto_avp_var = tk.BooleanVar(value=False)
+        self.auto_avp_check = ttk.Checkbutton(
+            avp_buttons,
+            text="Auto-update AVP",
+            variable=self.auto_avp_var
         )
-        self.capture_roi_btn.pack(side=tk.LEFT, padx=5)
+        self.auto_avp_check.pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(
+            avp_buttons,
+            text="Get Intrinsics",
+            command=self._fetch_intrinsics,
+            width=15
+        ).pack(side=tk.LEFT, padx=5)
+
+        ttk.Button(
+            avp_buttons,
+            text="Get Transformation",
+            command=self._fetch_transformation,
+            width=18
+        ).pack(side=tk.LEFT, padx=5)
 
         # Status display
-        capture_status_frame = ttk.Frame(capture_frame)
-        capture_status_frame.pack(side=tk.RIGHT, padx=5)
+        avp_status_frame = ttk.Frame(avp_frame)
+        avp_status_frame.pack(side=tk.RIGHT, padx=5)
 
-        ttk.Label(capture_status_frame, text="Status:").pack(side=tk.LEFT, padx=5)
+        ttk.Label(avp_status_frame, text="AVP Status:").pack(side=tk.LEFT, padx=5)
 
-        self.capture_status_var = tk.StringVar(value="Ready")
-        self.capture_status_label = ttk.Label(
-            capture_status_frame,
-            textvariable=self.capture_status_var,
+        self.avp_status_var = tk.StringVar(value="Not connected")
+        self.avp_status_label = ttk.Label(
+            avp_status_frame,
+            textvariable=self.avp_status_var,
             font=("Arial", 9, "italic"),
             foreground="gray"
         )
-        self.capture_status_label.pack(side=tk.LEFT, padx=5)
+        self.avp_status_label.pack(side=tk.LEFT, padx=5)
 
     def _create_image_panel(self, parent, title: str, row: int, col: int) -> Dict:
         """
@@ -414,6 +446,7 @@ class DebugViewer:
         Updates:
         - System status panel
         - RGB and Depth image panels
+        - AVP panels (if auto-update enabled)
         - Statistics
         - Display refresh timestamp
         """
@@ -438,6 +471,27 @@ class DebugViewer:
                     aruco_data = self.fetch_aruco_frame()
                     if aruco_data is not None:
                         self._update_aruco_panel(aruco_data)
+
+                # Fetch and display AVP frames if auto-update is enabled
+                if self.auto_avp_var.get():
+                    # Fetch AVP RGB frame
+                    avp_data = self.fetch_avp_latest_frame()
+                    if avp_data is not None:
+                        self._update_avp_rgb_panel(avp_data)
+
+                        # Update AVP status
+                        age = avp_data.get('age_seconds', 0)
+                        if age < 1.0:
+                            self.avp_status_var.set(f"AVP: Connected (age: {age:.2f}s)")
+                            self.avp_status_label.config(foreground="green")
+                        else:
+                            self.avp_status_var.set(f"AVP: Stale (age: {age:.1f}s)")
+                            self.avp_status_label.config(foreground="orange")
+
+                    # Fetch AVP ArUco frame
+                    avp_aruco_data = self.fetch_avp_aruco_frame()
+                    if avp_aruco_data is not None:
+                        self._update_avp_aruco_panel(avp_aruco_data)
 
                 # Track timing
                 elapsed = (datetime.now() - start_time).total_seconds()
@@ -526,6 +580,112 @@ class DebugViewer:
             return None
         except Exception as e:
             logger.error(f"Error fetching ArUco frame: {e}")
+            return None
+
+    def fetch_avp_latest_frame(self) -> Optional[Dict[str, Any]]:
+        """
+        Fetch latest AVP frame from /get_avp_latest_frame endpoint.
+
+        Returns:
+            dict: Frame data with 'rgb' base64-encoded image, timestamp, and age
+            None: If request fails
+        """
+        try:
+            response = requests.get(
+                f"{self.api_url}/get_avp_latest_frame",
+                timeout=3
+            )
+            if response.status_code == 200:
+                return response.json()
+            else:
+                if response.status_code != 503:
+                    logger.warning(f"AVP frame fetch returned {response.status_code}")
+                return None
+
+        except requests.exceptions.Timeout:
+            logger.warning("AVP frame request timed out")
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching AVP frame: {e}")
+            return None
+
+    def fetch_avp_aruco_frame(self) -> Optional[Dict[str, Any]]:
+        """
+        Fetch AVP ArUco detection frame from /get_avp_aruco_frame endpoint.
+
+        Returns:
+            dict: Frame data with ArUco detection and intrinsics info
+            None: If request fails
+        """
+        try:
+            response = requests.get(
+                f"{self.api_url}/get_avp_aruco_frame",
+                timeout=3
+            )
+            if response.status_code == 200:
+                return response.json()
+            else:
+                if response.status_code != 503:
+                    logger.warning(f"AVP ArUco frame fetch returned {response.status_code}")
+                return None
+
+        except requests.exceptions.Timeout:
+            logger.warning("AVP ArUco frame request timed out")
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching AVP ArUco frame: {e}")
+            return None
+
+    def fetch_intrinsics_data(self) -> Optional[Dict[str, Any]]:
+        """
+        Fetch camera intrinsics from /get_intrinsics endpoint.
+
+        Returns:
+            dict: Intrinsics data for both RS and AVP cameras
+            None: If request fails
+        """
+        try:
+            response = requests.get(
+                f"{self.api_url}/get_intrinsics",
+                timeout=3
+            )
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.warning(f"Intrinsics fetch returned {response.status_code}")
+                return None
+
+        except requests.exceptions.Timeout:
+            logger.warning("Intrinsics request timed out")
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching intrinsics: {e}")
+            return None
+
+    def fetch_transformation_data(self) -> Optional[Dict[str, Any]]:
+        """
+        Fetch coordinate transformation from /get_transformation endpoint.
+
+        Returns:
+            dict: Transformation matrix data
+            None: If request fails
+        """
+        try:
+            response = requests.get(
+                f"{self.api_url}/get_transformation",
+                timeout=3
+            )
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.warning(f"Transformation fetch returned {response.status_code}")
+                return None
+
+        except requests.exceptions.Timeout:
+            logger.warning("Transformation request timed out")
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching transformation: {e}")
             return None
 
     def _update_status_text_panel(self):
@@ -652,6 +812,153 @@ class DebugViewer:
 
         except Exception as e:
             logger.error(f"Error updating ArUco panel: {e}")
+
+    def _update_avp_rgb_panel(self, avp_data: Dict[str, Any]):
+        """
+        Update the AVP RGB image panel.
+
+        Args:
+            avp_data (dict): Dictionary containing 'rgb' base64-encoded image
+        """
+        try:
+            if 'rgb' in avp_data:
+                rgb_b64 = avp_data['rgb']
+                # Remove data URL prefix if present
+                if ',' in rgb_b64:
+                    rgb_b64 = rgb_b64.split(',')[1]
+
+                # Decode base64 to image
+                rgb_bytes = base64.b64decode(rgb_b64)
+                rgb_np = np.frombuffer(rgb_bytes, np.uint8)
+                rgb_image = cv2.imdecode(rgb_np, cv2.IMREAD_COLOR)
+
+                if rgb_image is not None:
+                    # Convert BGR to RGB for display
+                    rgb_image = cv2.cvtColor(rgb_image, cv2.COLOR_BGR2RGB)
+                    self.display_image(self.panel_avp_rgb, rgb_image)
+
+                    # Cache AVP frame info
+                    self.cached_data['avp_rgb_image'] = rgb_image
+                    self.cached_data['avp_timestamp'] = avp_data.get('timestamp')
+                    self.cached_data['avp_age'] = avp_data.get('age_seconds')
+
+        except Exception as e:
+            logger.error(f"Error updating AVP RGB panel: {e}")
+
+    def _update_avp_aruco_panel(self, avp_aruco_data: Dict[str, Any]):
+        """
+        Update the AVP ArUco detection image panel.
+
+        Args:
+            avp_aruco_data (dict): Dictionary containing ArUco detection data
+        """
+        try:
+            if 'rgb' in avp_aruco_data:
+                rgb_b64 = avp_aruco_data['rgb']
+                # Remove data URL prefix if present
+                if ',' in rgb_b64:
+                    rgb_b64 = rgb_b64.split(',')[1]
+
+                # Decode base64 to image
+                rgb_bytes = base64.b64decode(rgb_b64)
+                rgb_np = np.frombuffer(rgb_bytes, np.uint8)
+                aruco_image = cv2.imdecode(rgb_np, cv2.IMREAD_COLOR)
+
+                if aruco_image is not None:
+                    # Convert BGR to RGB for display
+                    aruco_image = cv2.cvtColor(aruco_image, cv2.COLOR_BGR2RGB)
+                    self.display_image(self.panel_avp_aruco, aruco_image)
+
+                    # Cache AVP ArUco image
+                    self.cached_data['avp_aruco_image'] = aruco_image
+
+        except Exception as e:
+            logger.error(f"Error updating AVP ArUco panel: {e}")
+
+    def _update_intrinsics_panel(self, intrinsics_data: Dict[str, Any]):
+        """
+        Update the Camera Intrinsics text panel.
+
+        Args:
+            intrinsics_data (dict): Dictionary containing RS and AVP intrinsics
+        """
+        text_content = "Camera Intrinsics\n" + "=" * 40 + "\n\n"
+
+        # RealSense intrinsics
+        if 'rs' in intrinsics_data:
+            rs_data = intrinsics_data['rs']
+            text_content += "[RealSense]\n"
+
+            if rs_data.get('calculated', False):
+                K = rs_data.get('K')
+                if K is not None:
+                    K_arr = np.array(K)
+                    text_content += self._format_matrix(K_arr, precision=2)
+                    text_content += f"Method: {rs_data.get('method', 'N/A')}\n"
+
+                    timestamp = rs_data.get('timestamp')
+                    if timestamp:
+                        dt = datetime.fromtimestamp(timestamp)
+                        text_content += f"Calculated: {dt.strftime('%H:%M:%S')}\n"
+            else:
+                text_content += "Not calculated yet\n"
+
+        text_content += "\n"
+
+        # AVP intrinsics
+        if 'avp' in intrinsics_data:
+            avp_data = intrinsics_data['avp']
+            text_content += "[AVP]\n"
+
+            if avp_data.get('calculated', False):
+                K = avp_data.get('K')
+                if K is not None:
+                    K_arr = np.array(K)
+                    text_content += self._format_matrix(K_arr, precision=2)
+                    text_content += f"Method: {avp_data.get('method', 'N/A')}\n"
+
+                    timestamp = avp_data.get('timestamp')
+                    if timestamp:
+                        dt = datetime.fromtimestamp(timestamp)
+                        text_content += f"Calculated: {dt.strftime('%H:%M:%S')}\n"
+            else:
+                text_content += "Not calculated yet\n"
+
+        self._update_text_widget(self.panel_intrinsics['text'], text_content)
+
+    def _update_transformation_panel(self, transformation_data: Dict[str, Any]):
+        """
+        Update the Coordinate Transformation text panel.
+
+        Args:
+            transformation_data (dict): Dictionary containing transformation matrix
+        """
+        text_content = "Coordinate Transformation\n" + "=" * 40 + "\n\n"
+
+        if transformation_data.get('calibrated', False):
+            text_content += "[T_avp_rs]\n"
+            text_content += "Transform from RS to AVP frame\n\n"
+
+            T_avp_rs = transformation_data.get('T_avp_rs')
+            if T_avp_rs is not None:
+                T_arr = np.array(T_avp_rs)
+                if T_arr.shape == (4, 4):
+                    text_content += self._format_matrix(T_arr, precision=4)
+                else:
+                    text_content += "Invalid matrix shape\n"
+
+            timestamp = transformation_data.get('timestamp')
+            if timestamp:
+                dt = datetime.fromtimestamp(timestamp)
+                text_content += f"\nCalculated: {dt.strftime('%H:%M:%S')}\n"
+        else:
+            text_content += "Not calibrated yet\n\n"
+            text_content += "Requirements:\n"
+            text_content += "- Both cameras must detect\n"
+            text_content += "  the same ArUco board\n"
+            text_content += "- Intrinsics must be calculated\n"
+
+        self._update_text_widget(self.panel_transformation['text'], text_content)
 
     def _update_poses_panel(self, poses_data: Dict[str, Any]):
         """
@@ -938,6 +1245,73 @@ class DebugViewer:
                 logger.error(f"ROI capture error: {e}")
 
         threading.Thread(target=capture_thread, daemon=True).start()
+
+    def _fetch_avp_frame(self):
+        """Fetch and display the latest AVP frame."""
+        logger.info("Fetching AVP frame")
+
+        # Fetch AVP RGB frame
+        avp_data = self.fetch_avp_latest_frame()
+        if avp_data is not None:
+            self._update_avp_rgb_panel(avp_data)
+
+            # Update AVP status label
+            age = avp_data.get('age_seconds', 0)
+            if age < 1.0:
+                self.avp_status_var.set(f"AVP: Connected (age: {age:.2f}s)")
+                self.avp_status_label.config(foreground="green")
+            else:
+                self.avp_status_var.set(f"AVP: Stale frame (age: {age:.1f}s)")
+                self.avp_status_label.config(foreground="orange")
+
+            logger.info(f"AVP frame displayed (age: {age:.2f}s)")
+        else:
+            self.avp_status_var.set("AVP: No frame available")
+            self.avp_status_label.config(foreground="red")
+            logger.warning("Failed to fetch AVP frame")
+
+        # Fetch AVP ArUco frame
+        avp_aruco_data = self.fetch_avp_aruco_frame()
+        if avp_aruco_data is not None:
+            self._update_avp_aruco_panel(avp_aruco_data)
+
+            # Check if intrinsics were calculated
+            if avp_aruco_data.get('intrinsics_calculated', False):
+                logger.info("AVP intrinsics calculated!")
+
+    def _fetch_intrinsics(self):
+        """Fetch and display camera intrinsics."""
+        logger.info("Fetching camera intrinsics")
+
+        intrinsics_data = self.fetch_intrinsics_data()
+        if intrinsics_data is not None:
+            self._update_intrinsics_panel(intrinsics_data)
+
+            # Cache intrinsics
+            self.cached_data['intrinsics_rs'] = intrinsics_data.get('rs')
+            self.cached_data['intrinsics_avp'] = intrinsics_data.get('avp')
+
+            logger.info("Intrinsics data displayed")
+        else:
+            logger.warning("Failed to fetch intrinsics")
+
+    def _fetch_transformation(self):
+        """Fetch and display coordinate transformation."""
+        logger.info("Fetching coordinate transformation")
+
+        transformation_data = self.fetch_transformation_data()
+        if transformation_data is not None:
+            self._update_transformation_panel(transformation_data)
+
+            # Cache transformation
+            self.cached_data['transformation'] = transformation_data
+
+            if transformation_data.get('calibrated', False):
+                logger.info("Transformation matrix displayed")
+            else:
+                logger.warning("Transformation not calibrated yet")
+        else:
+            logger.warning("Failed to fetch transformation")
 
     def on_closing(self):
         """Handle window close event."""

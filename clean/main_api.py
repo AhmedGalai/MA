@@ -41,9 +41,110 @@ realsense_client = None
 coordinate_manager = None
 state_lock = threading.Lock()
 
-# UxPlay frame storage
+# AVP (Apple Vision Pro) frame storage
 last_avp_frame = None
 last_avp_frame_timestamp = None
+last_avp_frame_metadata = {
+    'width': None,
+    'height': None,
+    'receive_time': None
+}
+
+# Intrinsics storage for both cameras
+rs_intrinsics = {
+    'K': None,
+    'calculated': False,
+    'method': None,
+    'timestamp': None
+}
+
+avp_intrinsics = {
+    'K': None,
+    'calculated': False,
+    'method': None,
+    'timestamp': None
+}
+
+# Calibration buffers for intrinsics calculation
+class IntrinsicsCalibBuffer:
+    """Buffer for collecting ArUco detections to calculate intrinsics."""
+    def __init__(self, max_frames=50):
+        self.objpoints = []
+        self.imgpoints = []
+        self.img_size = None
+        self.max_frames = max_frames
+
+    def add(self, corners, ids, img_shape, marker_size_m, separation_m, rows, cols):
+        """Add detected markers to the buffer."""
+        self.img_size = (img_shape[1], img_shape[0])
+        if ids is None or len(ids) == 0:
+            return
+
+        obj_rows, img_rows = [], []
+        for corner, marker_id in zip(corners, ids.flatten()):
+            obj = self._marker_obj_corners(marker_id, marker_size_m, separation_m, rows, cols)
+            if obj is None:
+                continue
+            img = np.asarray(corner, dtype=np.float32).reshape(-1, 2)
+            obj_rows.append(obj[:, :2])  # XY only (Z=0)
+            img_rows.append(img)
+
+        if obj_rows:
+            self.objpoints.append(np.vstack(obj_rows).astype(np.float32))
+            self.imgpoints.append(np.vstack(img_rows).astype(np.float32))
+            # Keep only last max_frames
+            self.objpoints = self.objpoints[-self.max_frames:]
+            self.imgpoints = self.imgpoints[-self.max_frames:]
+
+    def _marker_obj_corners(self, marker_id, marker_size_m, separation_m, rows, cols):
+        """Get 3D corner positions for a marker in the board."""
+        if marker_id < 0 or marker_id >= rows * cols:
+            return None
+        row, col = divmod(int(marker_id), cols)
+        x0 = col * (marker_size_m + separation_m)
+        y0 = row * (marker_size_m + separation_m)
+        return np.array([
+            [x0,                y0,                0.0],
+            [x0 + marker_size_m, y0,                0.0],
+            [x0 + marker_size_m, y0 + marker_size_m, 0.0],
+            [x0,                y0 + marker_size_m, 0.0]
+        ], dtype=np.float32)
+
+    def ready(self, min_samples=12):
+        """Check if enough samples collected."""
+        return len(self.imgpoints) >= min_samples
+
+    def calibrate(self):
+        """Calculate camera intrinsics from collected samples."""
+        if not self.ready():
+            return None
+
+        # Convert 2D object points to 3D
+        obj3d = [np.hstack([op, np.zeros((op.shape[0], 1), np.float32)])
+                 for op in self.objpoints]
+
+        flags = cv2.CALIB_ZERO_TANGENT_DIST | cv2.CALIB_FIX_K3
+        ret, K, dist, _, _ = cv2.calibrateCamera(
+            objectPoints=obj3d,
+            imagePoints=self.imgpoints,
+            imageSize=self.img_size,
+            cameraMatrix=None,
+            distCoeffs=None,
+            flags=flags
+        )
+
+        if ret:
+            return K.astype(np.float32)
+        return None
+
+    def clear(self):
+        """Clear the buffer."""
+        self.objpoints.clear()
+        self.imgpoints.clear()
+        self.img_size = None
+
+rs_calib_buffer = IntrinsicsCalibBuffer()
+avp_calib_buffer = IntrinsicsCalibBuffer()
 
 
 def initialize_api():
@@ -212,6 +313,31 @@ def get_aruco_frame():
 
             markers_detected = len(ids)
             marker_ids = ids.flatten().tolist()
+
+            # Add to RS calibration buffer
+            rs_calib_buffer.add(
+                corners, ids, rgb.shape,
+                CONFIG["aruco"]["marker_size_m"],
+                CONFIG["aruco"]["separation_m"],
+                CONFIG["aruco"]["rows"],
+                CONFIG["aruco"]["cols"]
+            )
+
+            # Try to calculate RS intrinsics
+            if rs_calib_buffer.ready() and not rs_intrinsics['calculated']:
+                K_calc = rs_calib_buffer.calibrate()
+                if K_calc is not None:
+                    rs_intrinsics['K'] = K_calc
+                    rs_intrinsics['calculated'] = True
+                    rs_intrinsics['method'] = 'aruco_calibration'
+                    rs_intrinsics['timestamp'] = time.time()
+                    logger.info(f"RS intrinsics calculated: fx={K_calc[0,0]:.1f}, fy={K_calc[1,1]:.1f}")
+
+                    # Draw notification
+                    cv2.putText(rgb, "RS Intrinsics Calculated!",
+                               (10, rgb.shape[0] - 20),
+                               cv2.FONT_HERSHEY_SIMPLEX,
+                               0.8, (0, 255, 0), 2)
         else:
             markers_detected = 0
             marker_ids = []
@@ -225,7 +351,10 @@ def get_aruco_frame():
             'rgb': f'data:image/jpeg;base64,{rgb_b64}',
             'markers_detected': markers_detected,
             'marker_ids': marker_ids,
-            'timestamp': time.time()
+            'timestamp': time.time(),
+            'intrinsics_calculated': rs_intrinsics['calculated'],
+            'K': rs_intrinsics['K'].tolist() if rs_intrinsics['K'] is not None else None,
+            'samples_collected': len(rs_calib_buffer.imgpoints)
         }), 200
 
     except Exception as e:
@@ -630,16 +759,20 @@ def receive_frame():
             logger.error(f"Error decoding frame: {e}")
             return jsonify({'error': f'Failed to decode frame: {e}'}), 400
 
-        # Store frame
+        # Store frame with metadata
         with state_lock:
             last_avp_frame = frame_np
-            last_avp_frame_timestamp = time.time()
+            timestamp = data.get('timestamp', time.time())
+            last_avp_frame_timestamp = timestamp
+            last_avp_frame_metadata['width'] = frame_np.shape[1]
+            last_avp_frame_metadata['height'] = frame_np.shape[0]
+            last_avp_frame_metadata['receive_time'] = time.time()
 
         # Get purpose (for logging)
         purpose = data.get('purpose', 'general')
-        logger.info(f"Frame received for purpose: {purpose}, shape: {frame_np.shape}")
+        logger.debug(f"AVP frame received: {purpose}, shape: {frame_np.shape}, ts: {timestamp}")
 
-        return jsonify({'success': True}), 200
+        return jsonify({'success': True, 'timestamp': timestamp}), 200
 
     except Exception as e:
         logger.error(f"Error receiving frame: {e}", exc_info=True)
@@ -689,6 +822,249 @@ def trigger_frame_capture():
             "success": False,
             "error": str(e)
         }), 500
+
+
+@app.route('/get_avp_latest_frame', methods=['GET'])
+def get_avp_latest_frame():
+    """
+    Get the most recent AVP frame received from UxPlay.
+
+    Returns:
+        JSON with base64-encoded RGB image and timestamp:
+        {
+            "rgb": "data:image/jpeg;base64,...",
+            "timestamp": float,
+            "age_seconds": float,
+            "width": int,
+            "height": int
+        }
+    """
+    try:
+        with state_lock:
+            if last_avp_frame is None:
+                return jsonify({'error': 'No AVP frame available'}), 404
+
+            frame = last_avp_frame.copy()
+            timestamp = last_avp_frame_timestamp
+            metadata = last_avp_frame_metadata.copy()
+
+        # Calculate age
+        age = time.time() - metadata['receive_time'] if metadata['receive_time'] else 0
+
+        # Convert BGR to JPEG
+        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        rgb_b64 = base64.b64encode(buffer).decode('utf-8')
+
+        return jsonify({
+            'rgb': f'data:image/jpeg;base64,{rgb_b64}',
+            'timestamp': timestamp,
+            'age_seconds': age,
+            'width': metadata['width'],
+            'height': metadata['height']
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting AVP frame: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/get_avp_aruco_frame', methods=['GET'])
+def get_avp_aruco_frame():
+    """
+    Get AVP frame with detected ArUco markers and calculate intrinsics.
+
+    Automatically calculates camera intrinsics when enough samples collected.
+
+    Returns:
+        JSON with annotated image and detection info:
+        {
+            "rgb": "data:image/jpeg;base64,...",
+            "markers_detected": int,
+            "marker_ids": [id1, id2, ...],
+            "timestamp": float,
+            "intrinsics_calculated": bool,
+            "K": [[fx, 0, cx], [0, fy, cy], [0, 0, 1]] or null,
+            "samples_collected": int
+        }
+    """
+    global avp_intrinsics, avp_calib_buffer
+
+    try:
+        with state_lock:
+            if last_avp_frame is None:
+                return jsonify({'error': 'No AVP frame available'}), 404
+
+            frame = last_avp_frame.copy()
+            timestamp = last_avp_frame_timestamp
+
+        # Import ArUco detector
+        from aruco_detector import ArucoDetector
+
+        # Detect ArUco markers
+        detector = ArucoDetector()
+        corners, ids = detector.detect_markers(frame)
+
+        # Draw detected markers
+        if corners is not None and ids is not None:
+            cv2.aruco.drawDetectedMarkers(frame, corners, ids)
+
+            # Draw IDs
+            for corner, marker_id in zip(corners, ids):
+                center = corner[0].mean(axis=0).astype(int)
+                cv2.putText(frame, f"ID:{marker_id[0]}",
+                           tuple(center),
+                           cv2.FONT_HERSHEY_SIMPLEX,
+                           0.6, (0, 255, 0), 2)
+
+            markers_detected = len(ids)
+            marker_ids = ids.flatten().tolist()
+
+            # Add to calibration buffer
+            avp_calib_buffer.add(
+                corners, ids, frame.shape,
+                CONFIG["aruco"]["marker_size_m"],
+                CONFIG["aruco"]["separation_m"],
+                CONFIG["aruco"]["rows"],
+                CONFIG["aruco"]["cols"]
+            )
+
+            # Try to calculate intrinsics
+            if avp_calib_buffer.ready() and not avp_intrinsics['calculated']:
+                K = avp_calib_buffer.calibrate()
+                if K is not None:
+                    avp_intrinsics['K'] = K
+                    avp_intrinsics['calculated'] = True
+                    avp_intrinsics['method'] = 'aruco_calibration'
+                    avp_intrinsics['timestamp'] = time.time()
+                    logger.info(f"AVP intrinsics calculated: fx={K[0,0]:.1f}, fy={K[1,1]:.1f}")
+
+                    # Draw notification
+                    cv2.putText(frame, "AVP Intrinsics Calculated!",
+                               (10, 30),
+                               cv2.FONT_HERSHEY_SIMPLEX,
+                               0.8, (0, 255, 0), 2)
+        else:
+            markers_detected = 0
+            marker_ids = []
+
+        # Convert BGR to JPEG
+        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        rgb_b64 = base64.b64encode(buffer).decode('utf-8')
+
+        response = {
+            'rgb': f'data:image/jpeg;base64,{rgb_b64}',
+            'markers_detected': markers_detected,
+            'marker_ids': marker_ids,
+            'timestamp': timestamp,
+            'intrinsics_calculated': avp_intrinsics['calculated'],
+            'K': avp_intrinsics['K'].tolist() if avp_intrinsics['K'] is not None else None,
+            'samples_collected': len(avp_calib_buffer.imgpoints)
+        }
+
+        return jsonify(response), 200
+
+    except Exception as e:
+        logger.error(f"Error getting AVP ArUco frame: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/get_intrinsics', methods=['GET'])
+def get_intrinsics():
+    """
+    Get calculated intrinsics for both RS and AVP cameras.
+
+    Returns:
+        JSON with intrinsics for both cameras:
+        {
+            "rs": {
+                "K": [[fx, 0, cx], [0, fy, cy], [0, 0, 1]],
+                "calculated": bool,
+                "method": str,
+                "timestamp": float
+            },
+            "avp": {
+                "K": [[fx, 0, cx], [0, fy, cy], [0, 0, 1]],
+                "calculated": bool,
+                "method": str,
+                "timestamp": float
+            }
+        }
+    """
+    try:
+        # Get RS intrinsics
+        rs_data = rs_intrinsics.copy()
+        if rs_data['K'] is not None:
+            rs_data['K'] = rs_data['K'].tolist()
+
+        # Get AVP intrinsics
+        avp_data = avp_intrinsics.copy()
+        if avp_data['K'] is not None:
+            avp_data['K'] = avp_data['K'].tolist()
+
+        return jsonify({
+            'rs': rs_data,
+            'avp': avp_data
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting intrinsics: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/get_transformation', methods=['GET'])
+def get_transformation():
+    """
+    Get transformation matrix between AVP and RS cameras.
+
+    Requires both cameras to be calibrated with ArUco board visible in both.
+
+    Returns:
+        JSON with transformation:
+        {
+            "T_avp_rs": 4x4 transformation matrix,
+            "calibrated": bool,
+            "timestamp": float
+        }
+    """
+    try:
+        with state_lock:
+            if coordinate_manager is None:
+                return jsonify({'error': 'CoordinateManager not initialized'}), 500
+
+            if not coordinate_manager.is_calibrated():
+                return jsonify({
+                    'calibrated': False,
+                    'T_avp_rs': None,
+                    'message': 'System not calibrated. Detect ArUco board in both cameras.'
+                }), 200
+
+            # Get transformation from world to both cameras
+            T_world_rs = coordinate_manager.T_world_rs
+            T_world_avp = coordinate_manager.T_world_avp
+
+            if T_world_rs is None or T_world_avp is None:
+                return jsonify({
+                    'calibrated': False,
+                    'T_avp_rs': None,
+                    'message': 'Missing calibration data'
+                }), 200
+
+            # Calculate T_avp_rs = T_avp_world * T_world_rs
+            # T_avp_world = inv(T_world_avp)
+            T_avp_world = np.linalg.inv(T_world_avp)
+            T_avp_rs = T_avp_world @ T_world_rs
+
+        return jsonify({
+            'calibrated': True,
+            'T_avp_rs': T_avp_rs.tolist(),
+            'T_world_rs': T_world_rs.tolist(),
+            'T_world_avp': T_world_avp.tolist(),
+            'timestamp': time.time()
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting transformation: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
 
 
 @app.errorhandler(400)
