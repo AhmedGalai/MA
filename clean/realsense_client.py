@@ -96,16 +96,37 @@ class RealSenseClient:
                 [0, 0, 1]
             ], dtype=np.float32)
 
-            self.is_running = True
-
             # Warm up the camera by discarding initial frames
-            logger.info("Warming up camera...")
+            logger.info("Warming up camera (this may take a few seconds)...")
+            successful_warmup = 0
+
             for i in range(30):  # Skip first 30 frames (~1 second at 30fps)
                 try:
                     self.pipeline.wait_for_frames(timeout_ms=2000)
-                except RuntimeError:
-                    logger.warning(f"Warm-up frame {i+1}/30 timeout")
+                    successful_warmup += 1
+                except RuntimeError as e:
+                    if i < 5:
+                        # First few frames timing out is common
+                        logger.debug(f"Warm-up frame {i+1}/30 timeout (normal for initial frames)")
+                    else:
+                        logger.warning(f"Warm-up frame {i+1}/30 timeout - {e}")
 
+            if successful_warmup < 10:
+                logger.error(f"Camera warm-up failed: only {successful_warmup}/30 frames captured")
+                logger.error("Possible causes:")
+                logger.error("  - Camera is in use by another application")
+                logger.error("  - USB connection issue (try different port)")
+                logger.error("  - Insufficient USB bandwidth")
+                logger.error("  - Camera hardware problem")
+                self.is_running = False
+                try:
+                    self.pipeline.stop()
+                except:
+                    pass
+                return False
+
+            logger.info(f"Camera warm-up complete: {successful_warmup}/30 frames captured")
+            self.is_running = True
             logger.info("RealSense pipeline started successfully")
             return True
 
