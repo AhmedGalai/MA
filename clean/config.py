@@ -15,7 +15,7 @@ CONFIG = {
     # Network Configuration
     # =========================================================================
     "network": {
-        "main_api_host": os.getenv("MAIN_API_HOST", "0.0.0.0"),
+        "main_api_host": os.getenv("MAIN_API_HOST", "192.168.178.68"),
         "main_api_port": int(os.getenv("MAIN_API_PORT", "8000")),
         "foundationpose_url": os.getenv(
             "FOUNDATIONPOSE_URL",
