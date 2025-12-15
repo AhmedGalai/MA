@@ -101,7 +101,9 @@ class DebugViewer:
             'status': {},
             'rgb_image': None,
             'depth_image': None,
-            'mask_image': None,
+            'aruco_image': None,
+            'aruco_markers': 0,
+            'aruco_ids': [],
             'last_fetch_time': None
         }
 
@@ -154,8 +156,8 @@ class DebugViewer:
         self.panel_rgb = self._create_image_panel(
             content_frame, "RealSense RGB", 0, 0
         )
-        self.panel_mask = self._create_image_panel(
-            content_frame, "Transformed Mask (RS view)", 0, 1
+        self.panel_aruco = self._create_image_panel(
+            content_frame, "ArUco Detection", 0, 1
         )
         self.panel_depth = self._create_image_panel(
             content_frame, "RealSense Depth", 0, 2
@@ -432,6 +434,11 @@ class DebugViewer:
                     if rgbd_data is not None:
                         self._update_rgbd_panels(rgbd_data)
 
+                    # Fetch and display ArUco detection frame
+                    aruco_data = self.fetch_aruco_frame()
+                    if aruco_data is not None:
+                        self._update_aruco_panel(aruco_data)
+
                 # Track timing
                 elapsed = (datetime.now() - start_time).total_seconds()
                 self._track_frame_time(elapsed)
@@ -493,6 +500,34 @@ class DebugViewer:
             logger.error(f"Error fetching RGBD frame: {e}")
             return None
 
+    def fetch_aruco_frame(self) -> Optional[Dict[str, Any]]:
+        """
+        Fetch ArUco detection frame from /get_aruco_frame endpoint.
+
+        Returns:
+            dict: Frame data with 'rgb' base64-encoded image and detection info
+            None: If request fails
+        """
+        try:
+            response = requests.get(
+                f"{self.api_url}/get_aruco_frame",
+                timeout=3
+            )
+            if response.status_code == 200:
+                return response.json()
+            else:
+                # Don't log warnings if RealSense is not connected (503)
+                if response.status_code != 503:
+                    logger.warning(f"ArUco frame fetch returned {response.status_code}")
+                return None
+
+        except requests.exceptions.Timeout:
+            logger.warning("ArUco frame request timed out")
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching ArUco frame: {e}")
+            return None
+
     def _update_status_text_panel(self):
         """Update the System Status text panel."""
         status = self.cached_data['status']
@@ -528,6 +563,15 @@ class DebugViewer:
             text_content += "\n[Calibration]\nRS: OK\nAVP: OK\n"
         else:
             text_content += "\n[Calibration]\nPending calibration\n"
+
+        # ArUco detection info
+        aruco_markers = self.cached_data.get('aruco_markers', 0)
+        aruco_ids = self.cached_data.get('aruco_ids', [])
+        text_content += f"\n[ArUco Detection]\n"
+        text_content += f"Markers: {aruco_markers}\n"
+        if aruco_ids:
+            ids_str = ', '.join(map(str, aruco_ids))
+            text_content += f"IDs: {ids_str}\n"
 
         self._update_text_widget(self.panel_status['text'], text_content)
 
@@ -575,6 +619,39 @@ class DebugViewer:
 
         except Exception as e:
             logger.error(f"Error updating RGBD panels: {e}")
+
+    def _update_aruco_panel(self, aruco_data: Dict[str, Any]):
+        """
+        Update the ArUco detection image panel.
+
+        Args:
+            aruco_data (dict): Dictionary containing 'rgb' base64-encoded image
+                              and detection info (markers_detected, marker_ids)
+        """
+        try:
+            # Decode and display ArUco annotated image
+            if 'rgb' in aruco_data:
+                rgb_b64 = aruco_data['rgb']
+                # Remove data URL prefix if present
+                if ',' in rgb_b64:
+                    rgb_b64 = rgb_b64.split(',')[1]
+
+                # Decode base64 to image
+                rgb_bytes = base64.b64decode(rgb_b64)
+                rgb_np = np.frombuffer(rgb_bytes, np.uint8)
+                aruco_image = cv2.imdecode(rgb_np, cv2.IMREAD_COLOR)
+
+                if aruco_image is not None:
+                    # Convert BGR to RGB for display
+                    aruco_image = cv2.cvtColor(aruco_image, cv2.COLOR_BGR2RGB)
+                    self.display_image(self.panel_aruco, aruco_image)
+
+                    # Cache detection info
+                    self.cached_data['aruco_markers'] = aruco_data.get('markers_detected', 0)
+                    self.cached_data['aruco_ids'] = aruco_data.get('marker_ids', [])
+
+        except Exception as e:
+            logger.error(f"Error updating ArUco panel: {e}")
 
     def _update_poses_panel(self, poses_data: Dict[str, Any]):
         """

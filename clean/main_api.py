@@ -161,6 +161,78 @@ def get_rgbd_frame():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/get_aruco_frame', methods=['GET'])
+def get_aruco_frame():
+    """
+    Get RGB frame with detected ArUco markers highlighted.
+
+    Returns:
+        JSON with base64-encoded RGB image with ArUco markers drawn:
+        {
+            "rgb": "data:image/jpeg;base64,...",
+            "markers_detected": int,
+            "marker_ids": [id1, id2, ...],
+            "timestamp": float
+        }
+    """
+    try:
+        with state_lock:
+            if realsense_client is None or not realsense_client.is_running:
+                return jsonify({'error': 'RealSense not connected'}), 503
+
+            # Capture frame
+            frame_data = realsense_client.capture()
+            if frame_data is None:
+                return jsonify({'error': 'Failed to capture frame'}), 500
+
+            rgb = frame_data['rgb'].copy()  # BGR format from RealSense
+            K = frame_data['K']
+
+        # Import ArUco detector
+        from aruco_detector import ArucoDetector
+
+        # Detect ArUco markers
+        detector = ArucoDetector()
+        corners, ids = detector.detect_markers(rgb)
+
+        # Draw detected markers on the image
+        if corners is not None and ids is not None:
+            # Draw markers
+            cv2.aruco.drawDetectedMarkers(rgb, corners, ids)
+
+            # Draw IDs as text for better visibility
+            for corner, marker_id in zip(corners, ids):
+                # Get center of marker
+                center = corner[0].mean(axis=0).astype(int)
+                # Draw marker ID
+                cv2.putText(rgb, f"ID:{marker_id[0]}",
+                           tuple(center),
+                           cv2.FONT_HERSHEY_SIMPLEX,
+                           0.6, (0, 255, 0), 2)
+
+            markers_detected = len(ids)
+            marker_ids = ids.flatten().tolist()
+        else:
+            markers_detected = 0
+            marker_ids = []
+
+        # Convert BGR to JPEG
+        _, rgb_buffer = cv2.imencode('.jpg', rgb,
+                                      [cv2.IMWRITE_JPEG_QUALITY, 85])
+        rgb_b64 = base64.b64encode(rgb_buffer).decode('utf-8')
+
+        return jsonify({
+            'rgb': f'data:image/jpeg;base64,{rgb_b64}',
+            'markers_detected': markers_detected,
+            'marker_ids': marker_ids,
+            'timestamp': time.time()
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting ArUco frame: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/models', methods=['GET'])
 def models():
     """
