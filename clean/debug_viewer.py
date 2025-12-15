@@ -554,7 +554,7 @@ class DebugViewer:
                 if rgb_image is not None:
                     # Convert BGR to RGB for display
                     rgb_image = cv2.cvtColor(rgb_image, cv2.COLOR_BGR2RGB)
-                    self._update_image_panel(self.panel_rgb, rgb_image)
+                    self.display_image(self.panel_rgb, rgb_image)
 
             # Decode and display Depth colormap
             if 'depth' in rgbd_data:
@@ -571,7 +571,7 @@ class DebugViewer:
                 if depth_image is not None:
                     # Convert BGR to RGB for display
                     depth_image = cv2.cvtColor(depth_image, cv2.COLOR_BGR2RGB)
-                    self._update_image_panel(self.panel_depth, depth_image)
+                    self.display_image(self.panel_depth, depth_image)
 
         except Exception as e:
             logger.error(f"Error updating RGBD panels: {e}")
