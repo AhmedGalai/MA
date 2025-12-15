@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   uxplay:
     build:
@@ -11,9 +9,6 @@ services:
       # API connection (use host.docker.internal for Docker Desktop)
       - API_HOST=host.docker.internal
       - API_PORT=8000
-    volumes:
-      - ./docker/capture_and_send.py:/app/capture_and_send.py:ro
-      - ./docker/start_uxplay.sh:/app/start_uxplay.sh:ro
     restart: unless-stopped
     privileged: true
     # Note: network_mode: host makes the container use the host network stack
@@ -36,7 +31,4 @@ services:
   #   environment:
   #     - API_HOST=host.docker.internal
   #     - API_PORT=8000
-  #   volumes:
-  #     - ./docker/capture_and_send.py:/app/capture_and_send.py:ro
-  #     - ./docker/start_uxplay.sh:/app/start_uxplay.sh:ro
   #   restart: unless-stopped
