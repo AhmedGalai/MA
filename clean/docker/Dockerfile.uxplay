@@ -58,6 +58,10 @@ EXPOSE 7000 7001 7100
 
 # Start script
 COPY start_uxplay.sh /app/
-RUN chmod +x /app/start_uxplay.sh
+RUN chmod +x /app/start_uxplay.sh && \
+    # Fix line endings if needed (convert CRLF to LF)
+    sed -i 's/\r$//' /app/start_uxplay.sh && \
+    sed -i 's/\r$//' /app/capture_and_send.py
 
-CMD ["/app/start_uxplay.sh"]
+# Use bash explicitly to run the script
+CMD ["/bin/bash", "/app/start_uxplay.sh"]
