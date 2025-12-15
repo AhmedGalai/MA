@@ -69,57 +69,44 @@ def test_realsense():
     print()
 
     # Step 4: Test frame capture without warm-up
-    print("Step 4: Testing frame capture (first attempt, may timeout)...")
+    print("Step 4: Testing frame capture (first attempt)...")
     try:
-        frames = pipeline.wait_for_frames(timeout_ms=2000)
+        frames = pipeline.wait_for_frames()  # No timeout - blocks until ready
         print("✓ First frame captured successfully!")
     except RuntimeError as e:
-        print(f"⚠ WARNING: First frame timeout (this is sometimes normal) - {e}")
+        print(f"❌ ERROR: Failed to capture first frame - {e}")
+        pipeline.stop()
+        return False
     print()
 
     # Step 5: Warm up camera
     print("Step 5: Warming up camera (skipping 30 frames)...")
-    successful_frames = 0
-    failed_frames = 0
 
     for i in range(30):
         try:
-            frames = pipeline.wait_for_frames(timeout_ms=2000)
-            successful_frames += 1
+            frames = pipeline.wait_for_frames()  # No timeout
             if (i + 1) % 10 == 0:
                 print(f"  Progress: {i+1}/30 frames captured")
         except RuntimeError as e:
-            failed_frames += 1
-            print(f"  ⚠ Frame {i+1} timeout")
+            print(f"❌ ERROR: Failed on warm-up frame {i+1}: {e}")
+            pipeline.stop()
+            return False
 
-    print(f"  Warm-up complete: {successful_frames} successful, {failed_frames} failed")
-
-    if successful_frames == 0:
-        print("❌ ERROR: No frames captured during warm-up!")
-        print("   - Camera might be defective")
-        print("   - Try unplugging and replugging the camera")
-        print("   - Check USB bandwidth (disconnect other USB devices)")
-        pipeline.stop()
-        return False
-
+    print(f"  Warm-up complete: 30/30 frames captured")
     print()
 
     # Step 6: Test stable frame capture
     print("Step 6: Testing stable frame capture (10 frames)...")
-    successful = 0
-    failed = 0
 
     for i in range(10):
         try:
-            frames = pipeline.wait_for_frames(timeout_ms=1000)
+            frames = pipeline.wait_for_frames()  # No timeout
 
             # Check if we got both color and depth
             depth_frame = frames.get_depth_frame()
             color_frame = frames.get_color_frame()
 
             if depth_frame and color_frame:
-                successful += 1
-
                 # Get frame data
                 depth_data = np.asanyarray(depth_frame.get_data())
                 color_data = np.asanyarray(color_frame.get_data())
@@ -129,14 +116,16 @@ def test_realsense():
                     print(f"    Color: {color_data.shape}, dtype: {color_data.dtype}")
                     print(f"    Depth: {depth_data.shape}, dtype: {depth_data.dtype}")
             else:
-                failed += 1
-                print(f"  ⚠ Frame {i+1}: Missing color or depth")
+                print(f"❌ ERROR: Frame {i+1} missing color or depth")
+                pipeline.stop()
+                return False
 
         except RuntimeError as e:
-            failed += 1
-            print(f"  ⚠ Frame {i+1}: Timeout - {e}")
+            print(f"❌ ERROR: Failed on frame {i+1}: {e}")
+            pipeline.stop()
+            return False
 
-    print(f"  Capture test: {successful}/10 successful")
+    print(f"  Capture test: 10/10 successful")
     print()
 
     # Step 7: Clean up
@@ -152,31 +141,15 @@ def test_realsense():
     print("=" * 60)
     print("DIAGNOSTIC SUMMARY")
     print("=" * 60)
-
-    if successful >= 8:
-        print("✓ SUCCESS: Camera is working properly!")
-        print("  Your RealSense camera is functioning correctly.")
-        print("  The API should work with this camera.")
-        return True
-    elif successful >= 5:
-        print("⚠ PARTIAL: Camera is working but unstable")
-        print("  The camera works but has frequent timeouts.")
-        print("  Recommendations:")
-        print("    - Use a high-quality USB 3.0 cable")
-        print("    - Connect to USB 3.0 port (not USB 2.0)")
-        print("    - Reduce USB bandwidth by disconnecting other devices")
-        print("    - Update RealSense firmware")
-        return True
-    else:
-        print("❌ FAILURE: Camera is not working")
-        print("  The camera cannot capture frames reliably.")
-        print("  Recommendations:")
-        print("    - Check physical connection")
-        print("    - Try different USB port")
-        print("    - Restart computer")
-        print("    - Update RealSense SDK")
-        print("    - Check camera permissions: sudo usermod -a -G video $USER")
-        return False
+    print("✓ SUCCESS: Camera is working properly!")
+    print("  Your RealSense camera passed all tests.")
+    print("  The API should now work correctly.")
+    print()
+    print("  If you still have issues:")
+    print("    - Restart the API server")
+    print("    - Check that no other process is using the camera")
+    print("    - Verify debug viewer can connect to API")
+    return True
 
 
 if __name__ == "__main__":
