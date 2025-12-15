@@ -664,10 +664,12 @@ if __name__ == '__main__':
         initialize_api()
 
         # Run the Flask server
+        # Note: use_reloader=False prevents double initialization of hardware
         app.run(
             host=CONFIG["network"]["main_api_host"],
             port=CONFIG["network"]["main_api_port"],
-            debug=CONFIG.get("debug", False)
+            debug=True,
+            use_reloader=False  # Must be False to prevent camera re-initialization
         )
 
     except KeyboardInterrupt:
