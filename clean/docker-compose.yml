@@ -11,10 +11,9 @@ services:
       - "7100:7100"       # AirPlay mirror (TCP)
       - "6000:6000/udp"   # AirPlay audio RAOP (UDP)
       - "6001:6001/udp"   # AirPlay audio timing (UDP)
-      - "5353:5353/udp"   # mDNS/Bonjour (UDP)
+      # Note: mDNS port 5353 removed - doesn't work from Docker on Windows
     environment:
       - API_HOST=host.docker.internal
       - API_PORT=8000
     restart: unless-stopped
-    # Privileged mode for network access
     privileged: false
