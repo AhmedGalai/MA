@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  uxplay:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile.uxplay
+    container_name: uxplay_avp
+    network_mode: "host"
+    environment:
+      # API connection (use host.docker.internal for Docker Desktop)
+      - API_HOST=host.docker.internal
+      - API_PORT=8000
+    volumes:
+      - ./docker/capture_and_send.py:/app/capture_and_send.py:ro
+      - ./docker/start_uxplay.sh:/app/start_uxplay.sh:ro
+    restart: unless-stopped
+    privileged: true
+    # Note: network_mode: host makes the container use the host network stack
+    # This is necessary for UxPlay to advertise itself via Bonjour/mDNS
+    # On Docker Desktop for Windows/Mac, you may need to use bridge mode instead
+
+  # Alternative configuration for Docker Desktop (bridge mode)
+  # Uncomment this and comment out the above service if host mode doesn't work
+  # uxplay-bridge:
+  #   build:
+  #     context: ./docker
+  #     dockerfile: Dockerfile.uxplay
+  #   container_name: uxplay_avp_bridge
+  #   ports:
+  #     - "7000:7000"     # AirPlay control
+  #     - "7001:7001"     # AirPlay data
+  #     - "7100:7100"     # AirPlay mirror
+  #     - "6000:6000/udp" # AirPlay audio
+  #     - "6001:6001/udp" # AirPlay audio
+  #   environment:
+  #     - API_HOST=host.docker.internal
+  #     - API_PORT=8000
+  #   volumes:
+  #     - ./docker/capture_and_send.py:/app/capture_and_send.py:ro
+  #     - ./docker/start_uxplay.sh:/app/start_uxplay.sh:ro
+  #   restart: unless-stopped
