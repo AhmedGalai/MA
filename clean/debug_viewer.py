@@ -149,51 +149,15 @@ class DebugViewer:
         # Divider
         ttk.Separator(main_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
 
-        # Create scrollable content area
-        # Canvas with scrollbar for 3x3 grid
-        canvas_container = ttk.Frame(main_frame)
-        canvas_container.pack(fill=tk.BOTH, expand=True)
+        # Content area - 3x3 grid with dynamic resizing
+        content_frame = ttk.Frame(main_frame)
+        content_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Create canvas and scrollbar
-        canvas = tk.Canvas(canvas_container)
-        scrollbar = ttk.Scrollbar(canvas_container, orient=tk.VERTICAL, command=canvas.yview)
-
-        # Content frame inside canvas
-        content_frame = ttk.Frame(canvas)
-
-        # Configure canvas
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        # Pack scrollbar and canvas
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        # Create window in canvas
-        canvas_window = canvas.create_window((0, 0), window=content_frame, anchor=tk.NW)
-
-        # Configure content frame to update scroll region
-        def configure_scroll_region(event=None):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-
-        content_frame.bind("<Configure>", configure_scroll_region)
-
-        # Bind mousewheel for scrolling
-        def on_mousewheel(event):
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-
-        canvas.bind_all("<MouseWheel>", on_mousewheel)
-
-        # Update canvas window width when canvas is resized
-        def configure_canvas_width(event):
-            canvas.itemconfig(canvas_window, width=event.width)
-
-        canvas.bind("<Configure>", configure_canvas_width)
-
-        # Configure grid weights for equal distribution
+        # Configure grid weights for equal distribution and dynamic resizing
         for i in range(3):
-            content_frame.grid_rowconfigure(i, weight=1)
+            content_frame.grid_rowconfigure(i, weight=1, minsize=150)
         for j in range(3):
-            content_frame.grid_columnconfigure(j, weight=1)
+            content_frame.grid_columnconfigure(j, weight=1, minsize=200)
 
         # Create image panels (row 0: RealSense)
         self.panel_rgb = self._create_image_panel(
@@ -1117,7 +1081,7 @@ class DebugViewer:
     def display_image(self, panel: Dict, image_array: np.ndarray,
                      resize: bool = True):
         """
-        Display an image on a canvas panel.
+        Display an image on a canvas panel with dynamic resizing.
 
         Args:
             panel (dict): Panel dictionary from _create_image_panel
@@ -1139,9 +1103,38 @@ class DebugViewer:
                 # BGR to RGB
                 image_array = cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)
 
-            # Resize if requested
+            canvas = panel['canvas']
+
+            # Get actual canvas size
+            canvas.update_idletasks()  # Force update to get accurate size
+            canvas_width = canvas.winfo_width()
+            canvas_height = canvas.winfo_height()
+
+            # Use minimum size if canvas hasn't been drawn yet
+            if canvas_width < 10:
+                canvas_width = 320
+            if canvas_height < 10:
+                canvas_height = 240
+
+            # Resize if requested - maintain aspect ratio
             if resize:
-                image_array = cv2.resize(image_array, (320, 240))
+                img_h, img_w = image_array.shape[:2]
+
+                # Calculate aspect ratios
+                img_aspect = img_w / img_h
+                canvas_aspect = canvas_width / canvas_height
+
+                # Resize to fit canvas while maintaining aspect ratio
+                if img_aspect > canvas_aspect:
+                    # Image is wider - fit to width
+                    new_w = canvas_width
+                    new_h = int(canvas_width / img_aspect)
+                else:
+                    # Image is taller - fit to height
+                    new_h = canvas_height
+                    new_w = int(canvas_height * img_aspect)
+
+                image_array = cv2.resize(image_array, (new_w, new_h))
 
             # Convert to PIL Image
             pil_image = Image.fromarray(image_array.astype(np.uint8))
@@ -1149,11 +1142,13 @@ class DebugViewer:
             # Convert to PhotoImage
             photo = ImageTk.PhotoImage(pil_image)
 
-            # Update canvas
-            canvas = panel['canvas']
+            # Update canvas - center the image
             canvas.delete('all')
-            canvas.create_image(160, 120, image=photo)
+            canvas.create_image(canvas_width // 2, canvas_height // 2, image=photo)
             panel['photo'] = photo  # Keep reference to prevent garbage collection
+
+            # Force canvas to update/redraw
+            canvas.update_idletasks()
 
         except Exception as e:
             logger.error(f"Error displaying image on {panel['title']}: {e}")
