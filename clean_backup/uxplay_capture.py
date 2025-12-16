@@ -45,7 +45,7 @@ class UxPlayCapture:
         self.frame_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"UxPlayCapture initialized: frame_dir={frame_dir}, api_url={api_url}")
 
-    def is_frame_available(self) -> bool:
+    def is_frame_available(self, max_age_s: float = 10.0) -> bool:
         """
         Check if latest frame exists and is recent.
 
@@ -60,22 +60,25 @@ class UxPlayCapture:
         mtime = self.latest_frame_path.stat().st_mtime
         age = time.time() - mtime
 
-        if age > 2.0:
-            logger.warning(f"Frame is stale (age: {age:.2f}s)")
+        if age > max_age_s:
+            logger.warning(f"Frame is stale (age: {age:.2f}s, max_age={max_age_s}s)")
             return False
 
         return True
 
-    def capture_frame(self) -> Optional[np.ndarray]:
+    def capture_frame(self, allow_stale: bool = True, max_age_s: float = 10.0) -> Optional[np.ndarray]:
         """
         Capture current frame from UxPlay output.
 
         Returns:
             Frame as numpy array (BGR) or None if capture failed
         """
-        if not self.is_frame_available():
-            logger.error("No recent frame available from UxPlay")
-            return None
+        if not self.is_frame_available(max_age_s=max_age_s):
+            if not allow_stale:
+                logger.error("No recent frame available from UxPlay")
+                return None
+            # If stale is allowed, continue and try to read whatever is there
+            logger.warning("Using stale UxPlay frame (capture_frame allow_stale=True)")
 
         try:
             frame = cv2.imread(str(self.latest_frame_path))
@@ -147,7 +150,7 @@ class UxPlayCapture:
         Returns:
             True if successful
         """
-        frame = self.capture_frame()
+        frame = self.capture_frame(allow_stale=True)
         if frame is None:
             return False
 

@@ -76,6 +76,12 @@ avp_intrinsics = {
     'timestamp': None
 }
 
+# Cache for latest RS frames to avoid hard failures when capture is briefly unavailable
+last_rs_frame = None
+last_rs_depth = None
+last_rs_timestamp = None
+last_rs_K = None
+
 # Calibration buffers for intrinsics calculation
 class IntrinsicsCalibBuffer:
     """Buffer for collecting ArUco detections to calculate intrinsics."""
@@ -238,34 +244,60 @@ def get_rgbd_frame():
     """
     try:
         with state_lock:
-            if realsense_client is None or not realsense_client.is_running:
-                return jsonify({'error': 'RealSense not connected'}), 503
+            rs_ready = realsense_client is not None and realsense_client.is_running
 
-            # Capture frame
+        frame_data = None
+        if rs_ready:
             frame_data = realsense_client.capture()
-            if frame_data is None:
-                return jsonify({'error': 'Failed to capture frame'}), 500
 
-            rgb = frame_data['rgb']
-            depth = frame_data['depth']
-            K = frame_data['K']
+        # Fallback to last cached frame if capture failed or RS not ready
+        using_cache = False
+        if frame_data is None:
+            with state_lock:
+                if last_rs_frame is not None and last_rs_depth is not None:
+                    frame_data = {
+                        'rgb': last_rs_frame.copy(),
+                        'depth': last_rs_depth.copy(),
+                        'K': last_rs_K.copy() if last_rs_K is not None else None,
+                        'timestamp': last_rs_timestamp
+                    }
+                    using_cache = True
+        else:
+            with state_lock:
+                last_rs_frame = frame_data['rgb'].copy()
+                last_rs_depth = frame_data['depth'].copy()
+                last_rs_K = frame_data['K'].copy()
+                last_rs_timestamp = frame_data['timestamp']
+
+        if frame_data is None:
+            return jsonify({'error': 'RealSense not connected or no frames available'}), 503
+
+        rgb = frame_data['rgb']
+        depth = frame_data['depth']
+        K = frame_data['K']
 
         # Convert BGR to JPEG (RealSense returns BGR format)
-        _, rgb_buffer = cv2.imencode('.jpg', rgb,
-                                      [cv2.IMWRITE_JPEG_QUALITY, 85])
+        ok_rgb, rgb_buffer = cv2.imencode('.jpg', rgb,
+                                          [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not ok_rgb:
+            raise RuntimeError("Failed to encode RGB frame")
         rgb_b64 = base64.b64encode(rgb_buffer).decode('utf-8')
 
         # Convert depth to colormap for visualization
         depth_normalized = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
         depth_colormap = cv2.applyColorMap(depth_normalized, cv2.COLORMAP_JET)
-        _, depth_buffer = cv2.imencode('.jpg', depth_colormap,
-                                        [cv2.IMWRITE_JPEG_QUALITY, 85])
+        ok_depth, depth_buffer = cv2.imencode('.jpg', depth_colormap,
+                                              [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not ok_depth:
+            raise RuntimeError("Failed to encode depth frame")
         depth_b64 = base64.b64encode(depth_buffer).decode('utf-8')
 
         return jsonify({
             'rgb': f'data:image/jpeg;base64,{rgb_b64}',
             'depth': f'data:image/jpeg;base64,{depth_b64}',
-            'timestamp': time.time()
+            'timestamp': frame_data.get('timestamp', time.time()),
+            'stale': using_cache,
+            'age_seconds': None if frame_data.get('timestamp') is None else max(0.0, time.time() - frame_data['timestamp'])
         }), 200
 
     except Exception as e:
@@ -289,16 +321,35 @@ def get_aruco_frame():
     """
     try:
         with state_lock:
-            if realsense_client is None or not realsense_client.is_running:
-                return jsonify({'error': 'RealSense not connected'}), 503
+            rs_ready = realsense_client is not None and realsense_client.is_running
 
-            # Capture frame
+        frame_data = None
+        if rs_ready:
             frame_data = realsense_client.capture()
-            if frame_data is None:
-                return jsonify({'error': 'Failed to capture frame'}), 500
 
-            rgb = frame_data['rgb'].copy()  # BGR format from RealSense
-            K = frame_data['K']
+        using_cache = False
+        if frame_data is None:
+            with state_lock:
+                if last_rs_frame is not None:
+                    frame_data = {
+                        'rgb': last_rs_frame.copy(),
+                        'K': last_rs_K.copy() if last_rs_K is not None else None,
+                        'timestamp': last_rs_timestamp
+                    }
+                    using_cache = True
+
+        if frame_data is None:
+            return jsonify({'error': 'RealSense not connected or no frames available'}), 503
+
+        rgb = frame_data['rgb'].copy()  # BGR format from RealSense
+        K = frame_data.get('K')
+
+        if not using_cache:
+            with state_lock:
+                last_rs_frame = frame_data['rgb'].copy()
+                if frame_data.get('K') is not None:
+                    last_rs_K = frame_data['K'].copy()
+                last_rs_timestamp = frame_data.get('timestamp', time.time())
 
         # Import ArUco detector
         from aruco_detector import ArucoDetector
@@ -354,8 +405,10 @@ def get_aruco_frame():
             marker_ids = []
 
         # Convert BGR to JPEG
-        _, rgb_buffer = cv2.imencode('.jpg', rgb,
-                                      [cv2.IMWRITE_JPEG_QUALITY, 85])
+        ok_rgb, rgb_buffer = cv2.imencode('.jpg', rgb,
+                                          [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not ok_rgb:
+            raise RuntimeError("Failed to encode ArUco frame")
         rgb_b64 = base64.b64encode(rgb_buffer).decode('utf-8')
 
         return jsonify({
@@ -365,7 +418,8 @@ def get_aruco_frame():
             'timestamp': time.time(),
             'intrinsics_calculated': rs_intrinsics['calculated'],
             'K': rs_intrinsics['K'].tolist() if rs_intrinsics['K'] is not None else None,
-            'samples_collected': len(rs_calib_buffer.imgpoints)
+            'samples_collected': len(rs_calib_buffer.imgpoints),
+            'stale': using_cache
         }), 200
 
     except Exception as e:
@@ -888,11 +942,26 @@ def trigger_frame_capture():
                 "message": f"Frame captured for {purpose}"
             }), 200
         else:
-            logger.error(f"Frame capture failed for {purpose}")
+            fallback_used = False
+            age = None
+            with state_lock:
+                if last_avp_frame is not None and last_avp_frame_metadata.get('receive_time'):
+                    fallback_used = True
+                    age = time.time() - last_avp_frame_metadata['receive_time']
+
+            if fallback_used:
+                logger.warning(f"Capture failed for {purpose}, serving cached AVP frame (age {age:.2f}s)")
+                return jsonify({
+                    "success": True,
+                    "message": f"Used cached AVP frame (age {age:.2f}s) for {purpose}",
+                    "cached": True
+                }), 200
+
+            logger.error(f"Frame capture failed for {purpose} (no cached AVP frame available)")
             return jsonify({
                 "success": False,
-                "error": "Frame capture failed"
-            }), 500
+                "error": "Frame capture failed and no cached frame available"
+            }), 503
 
     except Exception as e:
         logger.error(f"Error triggering frame capture: {e}", exc_info=True)
