@@ -80,6 +80,7 @@ class DebugViewer:
         self.root = tk.Tk()
         self.root.title("Pose Estimation Pipeline Debug Viewer")
         self.root.geometry(f"{width}x{height}")
+        self.root.minsize(800, 600)  # Set minimum size
 
         # Connection and update state
         self.is_connected = False
@@ -88,7 +89,8 @@ class DebugViewer:
         self.should_stop = False
 
         # View selection state
-        self.current_view = "All Cameras"  # Default view
+        self.current_view = "RealSense RGB + Depth"  # Default view
+        self.grid_panels = {}  # Store grid panels when in grid view
 
         # Statistics tracking
         self.stats = {
@@ -121,6 +123,9 @@ class DebugViewer:
         # Setup GUI
         self._setup_gui()
 
+        # Initialize default view
+        self._update_panel_visibility()
+
         # Setup window close handler
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
@@ -128,13 +133,13 @@ class DebugViewer:
 
     def _setup_gui(self):
         """Setup the tkinter GUI layout."""
-        # Main container
+        # Main container with scrolling capability
         main_frame = ttk.Frame(self.root)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Title and connection status bar
+        # Title and connection status bar (always visible)
         title_frame = ttk.Frame(main_frame)
-        title_frame.pack(fill=tk.X, padx=5, pady=5)
+        title_frame.pack(fill=tk.X, padx=10, pady=5)
 
         ttk.Label(
             title_frame,
@@ -150,90 +155,90 @@ class DebugViewer:
         )
         self.status_indicator.pack(side=tk.RIGHT, padx=10)
 
-        # Divider
-        ttk.Separator(main_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
-
-        # View selection
+        # View selection (always visible)
         view_frame = ttk.Frame(main_frame)
-        view_frame.pack(fill=tk.X, padx=5, pady=5)
+        view_frame.pack(fill=tk.X, padx=10, pady=5)
 
-        ttk.Label(view_frame, text="View:", font=("Arial", 10)).pack(side=tk.LEFT, padx=5)
+        ttk.Label(view_frame, text="View:", font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=5)
 
         self.view_var = tk.StringVar(value=self.current_view)
-        view_options = ["All Cameras", "RealSense Only", "AVP Only", "Side-by-Side"]
+        view_options = [
+            "RealSense RGB + Depth",
+            "RealSense ArUco Detection",
+            "AVP RGB",
+            "AVP ArUco Detection",
+            "Side-by-Side Comparison",
+            "All Cameras Grid"
+        ]
         self.view_selector = ttk.Combobox(
             view_frame,
             textvariable=self.view_var,
             values=view_options,
             state="readonly",
-            width=20
+            width=30
         )
         self.view_selector.pack(side=tk.LEFT, padx=5)
         self.view_selector.bind("<<ComboboxSelected>>", self._on_view_changed)
 
-        # Divider
         ttk.Separator(main_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
 
-        # Content area - split into images (top) and data (bottom)
-        content_container = ttk.Frame(main_frame)
-        content_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        # Scrollable content area
+        canvas = tk.Canvas(main_frame, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(main_frame, orient=tk.VERTICAL, command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
 
-        # Images area (2/3 of space)
-        images_frame = ttk.Frame(content_container)
-        images_frame.pack(fill=tk.BOTH, expand=True)
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
 
-        # Create grid for image panels (2 rows x 3 columns)
-        for i in range(2):
-            images_frame.grid_rowconfigure(i, weight=1, minsize=200)
-        for j in range(3):
-            images_frame.grid_columnconfigure(j, weight=1, minsize=250)
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
 
-        # Create all image panels (will show/hide based on view selection)
-        self.panel_rgb = self._create_image_panel(
-            images_frame, "RealSense RGB", 0, 0
-        )
-        self.panel_aruco = self._create_image_panel(
-            images_frame, "RS ArUco Detection", 0, 1
-        )
-        self.panel_depth = self._create_image_panel(
-            images_frame, "RealSense Depth", 0, 2
-        )
-        self.panel_avp_rgb = self._create_image_panel(
-            images_frame, "AVP RGB", 1, 0
-        )
-        self.panel_avp_aruco = self._create_image_panel(
-            images_frame, "AVP ArUco Detection", 1, 1
-        )
-        # Empty slot at 1,2 for future use
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Image display container (only one view visible at a time)
+        self.image_container = ttk.Frame(scrollable_frame)
+        self.image_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        # Create all image panels as separate frames (will pack/unpack based on view)
+        self.panel_rgb = self._create_standalone_panel("RealSense RGB")
+        self.panel_depth = self._create_standalone_panel("RealSense Depth")
+        self.panel_aruco = self._create_standalone_panel("RS ArUco Detection")
+        self.panel_avp_rgb = self._create_standalone_panel("AVP RGB")
+        self.panel_avp_aruco = self._create_standalone_panel("AVP ArUco Detection")
+
+        # Multi-panel container for grid views
+        self.multi_panel_container = ttk.Frame(self.image_container)
 
         # Divider
-        ttk.Separator(content_container, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
+        ttk.Separator(scrollable_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
 
-        # Consolidated data panel (1/3 of space)
-        data_frame = ttk.LabelFrame(content_container, text="System Data", padding=5)
-        data_frame.pack(fill=tk.BOTH, expand=False, pady=5)
+        # Consolidated data panel (always visible)
+        data_frame = ttk.LabelFrame(scrollable_frame, text="System Data", padding=5)
+        data_frame.pack(fill=tk.BOTH, expand=False, padx=5, pady=5)
 
         # Scrollable text area for all data
         text_scroll_frame = ttk.Frame(data_frame)
         text_scroll_frame.pack(fill=tk.BOTH, expand=True)
 
-        scrollbar = ttk.Scrollbar(text_scroll_frame)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        data_scrollbar = ttk.Scrollbar(text_scroll_frame)
+        data_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.data_text = tk.Text(
             text_scroll_frame,
-            height=15,
+            height=12,
             font=("Courier", 9),
             bg="#f0f0f0",
             relief=tk.SUNKEN,
             state=tk.DISABLED,
-            yscrollcommand=scrollbar.set,
+            yscrollcommand=data_scrollbar.set,
             wrap=tk.WORD
         )
         self.data_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.config(command=self.data_text.yview)
+        data_scrollbar.config(command=self.data_text.yview)
 
-        # Divider
         ttk.Separator(main_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
 
         # Control panel
@@ -366,6 +371,29 @@ class DebugViewer:
             'title': title
         }
 
+    def _create_standalone_panel(self, title: str) -> Dict:
+        """
+        Create a standalone image display panel (not gridded).
+
+        Args:
+            title (str): Panel title
+
+        Returns:
+            dict: Panel info dict with canvas and photo reference
+        """
+        frame = ttk.LabelFrame(self.image_container, text=title, padding=5)
+        # Don't pack yet - will be packed/unpacked based on view selection
+
+        canvas = tk.Canvas(frame, bg="black", width=640, height=480)
+        canvas.pack(fill=tk.BOTH, expand=True)
+
+        return {
+            'frame': frame,
+            'canvas': canvas,
+            'photo': None,
+            'title': title
+        }
+
     def _create_text_panel(self, parent, title: str, row: int, col: int) -> Dict:
         """
         Create a text display panel.
@@ -414,37 +442,85 @@ class DebugViewer:
         """Show/hide image panels based on current view selection."""
         view = self.current_view
 
-        if view == "All Cameras":
-            # Show all panels
-            self.panel_rgb['frame'].grid()
-            self.panel_aruco['frame'].grid()
-            self.panel_depth['frame'].grid()
-            self.panel_avp_rgb['frame'].grid()
-            self.panel_avp_aruco['frame'].grid()
+        # Hide all panels first
+        for panel in [self.panel_rgb, self.panel_depth, self.panel_aruco,
+                     self.panel_avp_rgb, self.panel_avp_aruco]:
+            panel['frame'].pack_forget()
 
-        elif view == "RealSense Only":
-            # Show only RealSense panels
-            self.panel_rgb['frame'].grid()
-            self.panel_aruco['frame'].grid()
-            self.panel_depth['frame'].grid()
-            self.panel_avp_rgb['frame'].grid_remove()
-            self.panel_avp_aruco['frame'].grid_remove()
+        # Hide multi-panel container
+        self.multi_panel_container.pack_forget()
 
-        elif view == "AVP Only":
-            # Show only AVP panels
-            self.panel_rgb['frame'].grid_remove()
-            self.panel_aruco['frame'].grid_remove()
-            self.panel_depth['frame'].grid_remove()
-            self.panel_avp_rgb['frame'].grid()
-            self.panel_avp_aruco['frame'].grid()
+        if view == "RealSense RGB + Depth":
+            # Show RGB and Depth side by side
+            self._show_side_by_side(self.panel_rgb, self.panel_depth)
 
-        elif view == "Side-by-Side":
-            # Show RGB comparison: RS RGB + AVP RGB
-            self.panel_rgb['frame'].grid()
-            self.panel_avp_rgb['frame'].grid()
-            self.panel_aruco['frame'].grid_remove()
-            self.panel_depth['frame'].grid_remove()
-            self.panel_avp_aruco['frame'].grid_remove()
+        elif view == "RealSense ArUco Detection":
+            # Show only ArUco detection
+            self.panel_aruco['frame'].pack(fill=tk.BOTH, expand=True)
+
+        elif view == "AVP RGB":
+            # Show only AVP RGB
+            self.panel_avp_rgb['frame'].pack(fill=tk.BOTH, expand=True)
+
+        elif view == "AVP ArUco Detection":
+            # Show only AVP ArUco
+            self.panel_avp_aruco['frame'].pack(fill=tk.BOTH, expand=True)
+
+        elif view == "Side-by-Side Comparison":
+            # Show RS RGB and AVP RGB side by side
+            self._show_side_by_side(self.panel_rgb, self.panel_avp_rgb)
+
+        elif view == "All Cameras Grid":
+            # Show all cameras in grid layout
+            self._show_grid_view()
+
+    def _show_side_by_side(self, panel1, panel2):
+        """Show two panels side by side."""
+        container = ttk.Frame(self.image_container)
+        container.pack(fill=tk.BOTH, expand=True)
+
+        # Repack panels into a horizontal layout
+        panel1['frame'].pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
+        panel2['frame'].pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
+
+    def _show_grid_view(self):
+        """Show all cameras in a grid layout."""
+        # Clear and setup multi-panel container
+        for widget in self.multi_panel_container.winfo_children():
+            widget.destroy()
+
+        self.multi_panel_container.pack(fill=tk.BOTH, expand=True)
+
+        # Configure grid
+        for i in range(2):
+            self.multi_panel_container.grid_rowconfigure(i, weight=1)
+        for j in range(3):
+            self.multi_panel_container.grid_columnconfigure(j, weight=1)
+
+        # Create new grid panels
+        grid_panels = {
+            'rgb': self._create_image_panel(self.multi_panel_container, "RealSense RGB", 0, 0),
+            'aruco': self._create_image_panel(self.multi_panel_container, "RS ArUco", 0, 1),
+            'depth': self._create_image_panel(self.multi_panel_container, "RS Depth", 0, 2),
+            'avp_rgb': self._create_image_panel(self.multi_panel_container, "AVP RGB", 1, 0),
+            'avp_aruco': self._create_image_panel(self.multi_panel_container, "AVP ArUco", 1, 1),
+        }
+
+        # Store reference for updates
+        self.grid_panels = grid_panels
+
+    def _get_active_panels(self):
+        """Get the currently active panels based on view."""
+        if self.current_view == "All Cameras Grid" and self.grid_panels:
+            return self.grid_panels
+        else:
+            return {
+                'rgb': self.panel_rgb,
+                'depth': self.panel_depth,
+                'aruco': self.panel_aruco,
+                'avp_rgb': self.panel_avp_rgb,
+                'avp_aruco': self.panel_avp_aruco
+            }
 
     def toggle_connection(self):
         """Toggle connection to API."""
@@ -1045,7 +1121,9 @@ class DebugViewer:
                 if rgb_image is not None:
                     # Convert BGR to RGB for display
                     rgb_image = cv2.cvtColor(rgb_image, cv2.COLOR_BGR2RGB)
-                    self.display_image(self.panel_rgb, rgb_image)
+                    panels = self._get_active_panels()
+                    if 'rgb' in panels:
+                        self.display_image(panels['rgb'], rgb_image)
 
             # Decode and display Depth colormap
             if 'depth' in rgbd_data:
@@ -1062,7 +1140,9 @@ class DebugViewer:
                 if depth_image is not None:
                     # Convert BGR to RGB for display
                     depth_image = cv2.cvtColor(depth_image, cv2.COLOR_BGR2RGB)
-                    self.display_image(self.panel_depth, depth_image)
+                    panels = self._get_active_panels()
+                    if 'depth' in panels:
+                        self.display_image(panels['depth'], depth_image)
 
         except Exception as e:
             logger.error(f"Error updating RGBD panels: {e}")
@@ -1091,7 +1171,9 @@ class DebugViewer:
                 if aruco_image is not None:
                     # Convert BGR to RGB for display
                     aruco_image = cv2.cvtColor(aruco_image, cv2.COLOR_BGR2RGB)
-                    self.display_image(self.panel_aruco, aruco_image)
+                    panels = self._get_active_panels()
+                    if 'aruco' in panels:
+                        self.display_image(panels['aruco'], aruco_image)
 
                     # Cache detection info
                     self.cached_data['aruco_markers'] = aruco_data.get('markers_detected', 0)
@@ -1122,7 +1204,9 @@ class DebugViewer:
                 if rgb_image is not None:
                     # Convert BGR to RGB for display
                     rgb_image = cv2.cvtColor(rgb_image, cv2.COLOR_BGR2RGB)
-                    self.display_image(self.panel_avp_rgb, rgb_image)
+                    panels = self._get_active_panels()
+                    if 'avp_rgb' in panels:
+                        self.display_image(panels['avp_rgb'], rgb_image)
 
                     # Cache AVP frame info
                     self.cached_data['avp_rgb_image'] = rgb_image
@@ -1154,7 +1238,9 @@ class DebugViewer:
                 if aruco_image is not None:
                     # Convert BGR to RGB for display
                     aruco_image = cv2.cvtColor(aruco_image, cv2.COLOR_BGR2RGB)
-                    self.display_image(self.panel_avp_aruco, aruco_image)
+                    panels = self._get_active_panels()
+                    if 'avp_aruco' in panels:
+                        self.display_image(panels['avp_aruco'], aruco_image)
 
                     # Cache AVP ArUco image
                     self.cached_data['avp_aruco_image'] = aruco_image
