@@ -1,8 +1,41 @@
-# Ignore unnecessary files during Docker build
-*.pyc
-__pycache__
-*.log
-.git
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
 .gitignore
+
+# Logs
+*.log
+
+# Frames output
+frames/
+*.jpg
+*.png
+
+# Other
 *.md
-!README.md
+LICENSE
