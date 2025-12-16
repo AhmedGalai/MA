@@ -226,7 +226,6 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Button("Open ROI Window") { openWindow(id: "roi") }
-                    Button("Open Logs Window") { openWindow(id: "logs") }
                 }
                 Button("Open Sensor Monitor") { openWindow(id: "sensors") }
                 Button("Open Debug Viewer") { openWindow(id: "debug") }

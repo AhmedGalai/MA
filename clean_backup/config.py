@@ -36,6 +36,8 @@ CONFIG = {
         "marker_size_m": 0.030,          # 30mm
         "marker_separation_m": 0.010,    # 10mm
         "separation_m": 0.010,           # 10mm (alias for marker_separation_m)
+        "headset_marker_id": 0,
+        "headset_marker_size_m": 0.050,  # 50mm headset marker
     },
 
     # =========================================================================
@@ -121,6 +123,8 @@ ARUCO_ROWS = CONFIG["aruco"]["rows"]
 ARUCO_COLS = CONFIG["aruco"]["cols"]
 MARKER_SIZE_M = CONFIG["aruco"]["marker_size_m"]
 SEPARATION_M = CONFIG["aruco"]["marker_separation_m"]
+HEADSET_MARKER_ID = CONFIG["aruco"].get("headset_marker_id", 0)
+HEADSET_MARKER_SIZE_M = CONFIG["aruco"].get("headset_marker_size_m", 0.050)
 
 RS_WIDTH = CONFIG["realsense"]["resolution_width"]
 RS_HEIGHT = CONFIG["realsense"]["resolution_height"]
