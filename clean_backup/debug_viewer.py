@@ -87,6 +87,9 @@ class DebugViewer:
         self.polling_thread = None
         self.should_stop = False
 
+        # View selection state
+        self.current_view = "All Cameras"  # Default view
+
         # Statistics tracking
         self.stats = {
             'total_frames': 0,
@@ -150,57 +153,85 @@ class DebugViewer:
         # Divider
         ttk.Separator(main_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
 
-        # Content area - 4x3 grid with dynamic resizing (added row for head pose)
-        content_frame = ttk.Frame(main_frame)
-        content_frame.pack(fill=tk.BOTH, expand=True)
+        # View selection
+        view_frame = ttk.Frame(main_frame)
+        view_frame.pack(fill=tk.X, padx=5, pady=5)
 
-        # Configure grid weights for equal distribution and dynamic resizing
-        for i in range(4):  # Changed from 3 to 4 rows
-            content_frame.grid_rowconfigure(i, weight=1, minsize=150)
+        ttk.Label(view_frame, text="View:", font=("Arial", 10)).pack(side=tk.LEFT, padx=5)
+
+        self.view_var = tk.StringVar(value=self.current_view)
+        view_options = ["All Cameras", "RealSense Only", "AVP Only", "Side-by-Side"]
+        self.view_selector = ttk.Combobox(
+            view_frame,
+            textvariable=self.view_var,
+            values=view_options,
+            state="readonly",
+            width=20
+        )
+        self.view_selector.pack(side=tk.LEFT, padx=5)
+        self.view_selector.bind("<<ComboboxSelected>>", self._on_view_changed)
+
+        # Divider
+        ttk.Separator(main_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
+
+        # Content area - split into images (top) and data (bottom)
+        content_container = ttk.Frame(main_frame)
+        content_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        # Images area (2/3 of space)
+        images_frame = ttk.Frame(content_container)
+        images_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Create grid for image panels (2 rows x 3 columns)
+        for i in range(2):
+            images_frame.grid_rowconfigure(i, weight=1, minsize=200)
         for j in range(3):
-            content_frame.grid_columnconfigure(j, weight=1, minsize=200)
+            images_frame.grid_columnconfigure(j, weight=1, minsize=250)
 
-        # Create image panels (row 0: RealSense)
+        # Create all image panels (will show/hide based on view selection)
         self.panel_rgb = self._create_image_panel(
-            content_frame, "RealSense RGB", 0, 0
+            images_frame, "RealSense RGB", 0, 0
         )
         self.panel_aruco = self._create_image_panel(
-            content_frame, "RS ArUco Detection", 0, 1
+            images_frame, "RS ArUco Detection", 0, 1
         )
         self.panel_depth = self._create_image_panel(
-            content_frame, "RealSense Depth", 0, 2
+            images_frame, "RealSense Depth", 0, 2
         )
-
-        # Create image panels (row 1: AVP)
         self.panel_avp_rgb = self._create_image_panel(
-            content_frame, "AVP RGB", 1, 0
+            images_frame, "AVP RGB", 1, 0
         )
         self.panel_avp_aruco = self._create_image_panel(
-            content_frame, "AVP ArUco Detection", 1, 1
+            images_frame, "AVP ArUco Detection", 1, 1
         )
-        self.panel_intrinsics = self._create_text_panel(
-            content_frame, "Camera Intrinsics", 1, 2
-        )
+        # Empty slot at 1,2 for future use
 
-        # Create text panels (row 2: Status & Info)
-        self.panel_status = self._create_text_panel(
-            content_frame, "System Status", 2, 0
-        )
-        self.panel_transformation = self._create_text_panel(
-            content_frame, "Coordinate Transformation", 2, 1
-        )
-        self.panel_stats = self._create_text_panel(
-            content_frame, "Statistics", 2, 2
-        )
+        # Divider
+        ttk.Separator(content_container, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
 
-        # Create text panels (row 3: Head Pose & RS Camera Pose)
-        self.panel_head_pose = self._create_text_panel(
-            content_frame, "Head Pose (VisionOS)", 3, 0
+        # Consolidated data panel (1/3 of space)
+        data_frame = ttk.LabelFrame(content_container, text="System Data", padding=5)
+        data_frame.pack(fill=tk.BOTH, expand=False, pady=5)
+
+        # Scrollable text area for all data
+        text_scroll_frame = ttk.Frame(data_frame)
+        text_scroll_frame.pack(fill=tk.BOTH, expand=True)
+
+        scrollbar = ttk.Scrollbar(text_scroll_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.data_text = tk.Text(
+            text_scroll_frame,
+            height=15,
+            font=("Courier", 9),
+            bg="#f0f0f0",
+            relief=tk.SUNKEN,
+            state=tk.DISABLED,
+            yscrollcommand=scrollbar.set,
+            wrap=tk.WORD
         )
-        self.panel_rs_pose = self._create_text_panel(
-            content_frame, "RS Camera in AVP Frame", 3, 1
-        )
-        # Leave 3,2 empty or for future use
+        self.data_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.data_text.yview)
 
         # Divider
         ttk.Separator(main_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
@@ -373,6 +404,48 @@ class DebugViewer:
         self.update_rate_hz = float(value)
         self.refresh_label.config(text=f"{self.update_rate_hz:.1f} Hz")
 
+    def _on_view_changed(self, event=None):
+        """Handle view selection change."""
+        self.current_view = self.view_var.get()
+        self._update_panel_visibility()
+        logger.info(f"View changed to: {self.current_view}")
+
+    def _update_panel_visibility(self):
+        """Show/hide image panels based on current view selection."""
+        view = self.current_view
+
+        if view == "All Cameras":
+            # Show all panels
+            self.panel_rgb['frame'].grid()
+            self.panel_aruco['frame'].grid()
+            self.panel_depth['frame'].grid()
+            self.panel_avp_rgb['frame'].grid()
+            self.panel_avp_aruco['frame'].grid()
+
+        elif view == "RealSense Only":
+            # Show only RealSense panels
+            self.panel_rgb['frame'].grid()
+            self.panel_aruco['frame'].grid()
+            self.panel_depth['frame'].grid()
+            self.panel_avp_rgb['frame'].grid_remove()
+            self.panel_avp_aruco['frame'].grid_remove()
+
+        elif view == "AVP Only":
+            # Show only AVP panels
+            self.panel_rgb['frame'].grid_remove()
+            self.panel_aruco['frame'].grid_remove()
+            self.panel_depth['frame'].grid_remove()
+            self.panel_avp_rgb['frame'].grid()
+            self.panel_avp_aruco['frame'].grid()
+
+        elif view == "Side-by-Side":
+            # Show RGB comparison: RS RGB + AVP RGB
+            self.panel_rgb['frame'].grid()
+            self.panel_avp_rgb['frame'].grid()
+            self.panel_aruco['frame'].grid_remove()
+            self.panel_depth['frame'].grid_remove()
+            self.panel_avp_aruco['frame'].grid_remove()
+
     def toggle_connection(self):
         """Toggle connection to API."""
         if self.is_connected:
@@ -504,13 +577,27 @@ class DebugViewer:
                     if avp_aruco_data is not None:
                         self._update_avp_aruco_panel(avp_aruco_data)
 
-                # Fetch and display head pose data
+                # Fetch and cache head pose data
                 head_pose_data = self.fetch_head_pose_data()
-                self._update_head_pose_panel(head_pose_data)
+                self.cached_data['head_pose_data'] = head_pose_data
 
-                # Fetch and display RS camera pose in AVP frame
+                # Fetch and cache RS camera pose in AVP frame
                 rs_pose_data = self.fetch_rs_pose_in_avp_data()
-                self._update_rs_pose_panel(rs_pose_data)
+                self.cached_data['rs_pose_data'] = rs_pose_data
+
+                # Fetch and cache intrinsics data
+                intrinsics_data = self.fetch_intrinsics_data()
+                if intrinsics_data:
+                    self.cached_data['intrinsics_rs'] = intrinsics_data.get('rs')
+                    self.cached_data['intrinsics_avp'] = intrinsics_data.get('avp')
+
+                # Fetch and cache transformation data
+                transformation_data = self.fetch_transformation_data()
+                if transformation_data:
+                    self.cached_data['transformation'] = transformation_data
+
+                # Update consolidated data panel with all information
+                self._update_consolidated_data_panel()
 
                 # Track timing
                 elapsed = (datetime.now() - start_time).total_seconds()
@@ -762,52 +849,178 @@ class DebugViewer:
             logger.error(f"Error fetching RS pose in AVP: {e}")
             return None
 
-    def _update_status_text_panel(self):
-        """Update the System Status text panel."""
-        status = self.cached_data['status']
-        text_content = "System Status\n" + "=" * 40 + "\n\n"
+    def _update_consolidated_data_panel(self):
+        """Update the consolidated data panel with all system information."""
+        text_content = ""
 
-        # Connection status
+        # === SYSTEM STATUS ===
+        text_content += "=" * 80 + "\n"
+        text_content += "SYSTEM STATUS\n"
+        text_content += "=" * 80 + "\n\n"
+
+        status = self.cached_data.get('status', {})
         rs_connected = status.get('rs_connected', False)
-        text_content += f"RealSense Connected: {'Yes' if rs_connected else 'No'}\n"
-
-        # Calibration status
         calibrated = status.get('calibrated', False)
-        text_content += f"System Calibrated: {'Yes' if calibrated else 'No'}\n"
 
-        # Last update
-        last_update = self.cached_data['last_fetch_time']
+        text_content += f"RealSense Connected:  {'✓ Yes' if rs_connected else '✗ No'}\n"
+        text_content += f"System Calibrated:    {'✓ Yes' if calibrated else '✗ No'}\n"
+
+        last_update = self.cached_data.get('last_fetch_time')
         if last_update:
-            text_content += f"\nLast Update: {last_update.strftime('%H:%M:%S.%f')[:-3]}\n"
+            text_content += f"Last Update:          {last_update.strftime('%H:%M:%S.%f')[:-3]}\n"
 
-        # Frame rate
         if len(self.stats['frame_times']) > 0:
             avg_time = self.stats['average_frame_time']
             if avg_time > 0:
                 fps = 1.0 / avg_time
-                text_content += f"Update Rate: {fps:.1f} Hz\n"
+                text_content += f"Update Rate:          {fps:.1f} Hz\n"
 
-        # Additional status info
-        if rs_connected:
-            text_content += "\n[RS Status]\nConnected and running\n"
-        else:
-            text_content += "\n[RS Status]\nNot available\n"
-
-        if calibrated:
-            text_content += "\n[Calibration]\nRS: OK\nAVP: OK\n"
-        else:
-            text_content += "\n[Calibration]\nPending calibration\n"
-
-        # ArUco detection info
+        # ArUco detection
         aruco_markers = self.cached_data.get('aruco_markers', 0)
         aruco_ids = self.cached_data.get('aruco_ids', [])
-        text_content += f"\n[ArUco Detection]\n"
-        text_content += f"Markers: {aruco_markers}\n"
+        text_content += f"\nArUco Markers Detected: {aruco_markers}\n"
         if aruco_ids:
             ids_str = ', '.join(map(str, aruco_ids))
-            text_content += f"IDs: {ids_str}\n"
+            text_content += f"Marker IDs: {ids_str}\n"
 
-        self._update_text_widget(self.panel_status['text'], text_content)
+        # === HEAD POSE (VisionOS) ===
+        text_content += "\n" + "=" * 80 + "\n"
+        text_content += "HEAD POSE (VisionOS)\n"
+        text_content += "=" * 80 + "\n\n"
+
+        head_pose_data = self.cached_data.get('head_pose_data')
+        if head_pose_data is None:
+            text_content += "No head pose data available - waiting for VisionOS device to connect...\n"
+        else:
+            position = head_pose_data.get('position', [0, 0, 0])
+            quaternion = head_pose_data.get('quaternion', [0, 0, 0, 1])
+            age = head_pose_data.get('age_seconds', 0)
+            reception_count = head_pose_data.get('reception_count', 0)
+            reception_rate = head_pose_data.get('reception_rate', None)
+
+            text_content += f"Position (m):         X={position[0]:>7.3f}  Y={position[1]:>7.3f}  Z={position[2]:>7.3f}\n"
+            text_content += f"Quaternion:           X={quaternion[0]:>7.3f}  Y={quaternion[1]:>7.3f}  Z={quaternion[2]:>7.3f}  W={quaternion[3]:>7.3f}\n"
+
+            if age < 0.5:
+                status_text = "LIVE ✓"
+            elif age < 2.0:
+                status_text = "RECENT"
+            else:
+                status_text = "STALE ⚠"
+
+            text_content += f"Status:               {status_text} (age: {age:.2f}s)\n"
+            text_content += f"Reception Count:      {reception_count}\n"
+            if reception_rate is not None:
+                text_content += f"Reception Rate:       {reception_rate:.1f} Hz\n"
+
+        # === RS CAMERA POSE IN AVP FRAME ===
+        text_content += "\n" + "=" * 80 + "\n"
+        text_content += "RS CAMERA POSE IN AVP FRAME\n"
+        text_content += "=" * 80 + "\n\n"
+
+        rs_pose_data = self.cached_data.get('rs_pose_data')
+        if rs_pose_data is None or not rs_pose_data.get('calibrated', False):
+            text_content += "Not calibrated\n\n"
+            text_content += "Requirements:\n"
+            text_content += "  • Perform RS calibration (detect ArUco board with RealSense)\n"
+            text_content += "  • Perform AVP calibration (detect ArUco board with Vision Pro)\n"
+            text_content += "  • Both cameras must see the same board\n"
+        else:
+            position = rs_pose_data.get('position', [0, 0, 0])
+            quaternion = rs_pose_data.get('quaternion', [0, 0, 0, 1])
+            head_pose_age = rs_pose_data.get('head_pose_age', None)
+
+            text_content += f"Position (m):         X={position[0]:>7.3f}  Y={position[1]:>7.3f}  Z={position[2]:>7.3f}\n"
+            text_content += f"Quaternion:           X={quaternion[0]:>7.3f}  Y={quaternion[1]:>7.3f}  Z={quaternion[2]:>7.3f}  W={quaternion[3]:>7.3f}\n"
+            text_content += f"Calibrated:           ✓ YES\n"
+
+            if head_pose_age is not None:
+                if head_pose_age < 0.5:
+                    text_content += f"Head Pose:            LIVE ({head_pose_age:.2f}s)\n"
+                elif head_pose_age < 2.0:
+                    text_content += f"Head Pose:            Recent ({head_pose_age:.2f}s)\n"
+                else:
+                    text_content += f"Head Pose:            Stale ({head_pose_age:.1f}s) ⚠\n"
+
+            text_content += "\nThis shows where the RealSense camera is located in your VisionOS headset view.\n"
+
+        # === CAMERA INTRINSICS ===
+        text_content += "\n" + "=" * 80 + "\n"
+        text_content += "CAMERA INTRINSICS\n"
+        text_content += "=" * 80 + "\n\n"
+
+        intrinsics_rs = self.cached_data.get('intrinsics_rs')
+        intrinsics_avp = self.cached_data.get('intrinsics_avp')
+
+        text_content += "[RealSense]\n"
+        if intrinsics_rs and intrinsics_rs.get('calculated', False):
+            K = intrinsics_rs.get('K')
+            if K is not None:
+                K_arr = np.array(K)
+                text_content += self._format_matrix(K_arr, precision=2)
+                text_content += f"Method: {intrinsics_rs.get('method', 'N/A')}\n"
+        else:
+            text_content += "Not calculated yet\n"
+
+        text_content += "\n[AVP (Vision Pro)]\n"
+        if intrinsics_avp and intrinsics_avp.get('calculated', False):
+            K = intrinsics_avp.get('K')
+            if K is not None:
+                K_arr = np.array(K)
+                text_content += self._format_matrix(K_arr, precision=2)
+                text_content += f"Method: {intrinsics_avp.get('method', 'N/A')}\n"
+        else:
+            text_content += "Not calculated yet\n"
+
+        # === COORDINATE TRANSFORMATION ===
+        text_content += "\n" + "=" * 80 + "\n"
+        text_content += "COORDINATE TRANSFORMATION\n"
+        text_content += "=" * 80 + "\n\n"
+
+        transformation = self.cached_data.get('transformation')
+        if transformation and transformation.get('calibrated', False):
+            text_content += "[T_avp_rs] - Transform from RS to AVP frame\n\n"
+            T_avp_rs = transformation.get('T_avp_rs')
+            if T_avp_rs is not None:
+                T_arr = np.array(T_avp_rs)
+                if T_arr.shape == (4, 4):
+                    text_content += self._format_matrix(T_arr, precision=4)
+
+            timestamp = transformation.get('timestamp')
+            if timestamp:
+                dt = datetime.fromtimestamp(timestamp)
+                text_content += f"\nCalculated: {dt.strftime('%H:%M:%S')}\n"
+        else:
+            text_content += "Not calibrated yet\n\n"
+            text_content += "Requirements:\n"
+            text_content += "  • Both cameras must detect the same ArUco board\n"
+            text_content += "  • Intrinsics must be calculated for both\n"
+
+        # === STATISTICS ===
+        text_content += "\n" + "=" * 80 + "\n"
+        text_content += "STATISTICS\n"
+        text_content += "=" * 80 + "\n\n"
+
+        text_content += f"Total Updates:        {self.stats['total_frames']}\n"
+        text_content += f"Successful:           {self.stats['successful_estimates']}\n"
+        text_content += f"Failed:               {self.stats['failed_estimates']}\n"
+
+        if self.stats['total_frames'] > 0:
+            success_rate = (self.stats['successful_estimates'] / self.stats['total_frames'] * 100)
+            text_content += f"Success Rate:         {success_rate:.1f}%\n"
+
+        if len(self.stats['frame_times']) > 0:
+            avg_time = self.stats['average_frame_time']
+            text_content += f"\nAvg Frame Time:       {avg_time*1000:.2f} ms\n"
+            if avg_time > 0:
+                fps = 1.0 / avg_time
+                text_content += f"Estimated Rate:       {fps:.1f} Hz\n"
+
+        # Update the consolidated text widget
+        self.data_text.config(state=tk.NORMAL)
+        self.data_text.delete('1.0', tk.END)
+        self.data_text.insert('1.0', text_content)
+        self.data_text.config(state=tk.DISABLED)
 
     def _update_rgbd_panels(self, rgbd_data: Dict[str, Any]):
         """
@@ -1229,7 +1442,7 @@ class DebugViewer:
         )
 
         self.stats['last_update_time'] = datetime.now()
-        self._update_stats_panel()
+        # Stats are now part of consolidated panel, no separate update needed
 
     def _update_status_text(self, panel: str, message: str):
         """
@@ -1371,7 +1584,7 @@ class DebugViewer:
             'average_frame_time': 0.0,
             'frame_times': []
         }
-        self._update_stats_panel()
+        self._update_consolidated_data_panel()
         logger.info("Statistics cleared")
 
     def _capture_for_aruco(self):
@@ -1495,11 +1708,12 @@ class DebugViewer:
 
         intrinsics_data = self.fetch_intrinsics_data()
         if intrinsics_data is not None:
-            self._update_intrinsics_panel(intrinsics_data)
-
             # Cache intrinsics
             self.cached_data['intrinsics_rs'] = intrinsics_data.get('rs')
             self.cached_data['intrinsics_avp'] = intrinsics_data.get('avp')
+
+            # Update consolidated panel
+            self._update_consolidated_data_panel()
 
             logger.info("Intrinsics data displayed")
         else:
@@ -1511,10 +1725,11 @@ class DebugViewer:
 
         transformation_data = self.fetch_transformation_data()
         if transformation_data is not None:
-            self._update_transformation_panel(transformation_data)
-
             # Cache transformation
             self.cached_data['transformation'] = transformation_data
+
+            # Update consolidated panel
+            self._update_consolidated_data_panel()
 
             if transformation_data.get('calibrated', False):
                 logger.info("Transformation matrix displayed")
