@@ -39,6 +39,7 @@ final class DebugDashboardModel: ObservableObject {
         var avpRS: [[Double]]?
         var worldRS: [[Double]]?
         var worldAVP: [[Double]]?
+        var avpBoard: [[Double]]?
     }
 
     struct PoseInAVPState {
@@ -55,6 +56,7 @@ final class DebugDashboardModel: ObservableObject {
     @Published var intrinsics = IntrinsicsState()
     @Published var transforms = TransformState()
     @Published var poseInAVP = PoseInAVPState()
+    @Published var avpBoardPose: [[Double]]?
     @Published var lastError: String?
     @Published var lastUpdate: Date?
 
@@ -118,8 +120,11 @@ final class DebugDashboardModel: ObservableObject {
             self.avpFrame = avp
             self.avpArucoFrame = avpAruco
             self.intrinsics = intrinsics
-            self.transforms = transforms
+            var t = transforms
+            t.avpBoard = avpAruco.poseMatrix
+            self.transforms = t
             self.poseInAVP = poseInAVP
+            self.avpBoardPose = avpAruco.poseMatrix
             self.lastError = nil
         } catch {
             lastError = error.localizedDescription
@@ -140,6 +145,7 @@ private extension DebugDashboardModel {
         let intrinsics_calculated: Bool?
         let K: [[Double]]?
         let samples_collected: Int?
+        let pose_matrix: [[Double]]?
     }
     struct AVPFrameResponse: Decodable { let rgb: String; let timestamp: Double?; let age_seconds: Double?; let width: Int?; let height: Int? }
     struct IntrinsicsResponse: Decodable {
@@ -206,7 +212,9 @@ private extension DebugDashboardModel {
     }
 
     func fetchAVPLatest(baseURL: URL) async throws -> FrameState {
-        let data = try await performRequest(baseURL: baseURL, path: "get_avp_latest_frame")
+        var comps = URLComponents(url: baseURL.appendingPathComponent("get_avp_latest_frame"), resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "purpose", value: "roi_selection")]
+        let data = try await performRequest(url: comps.url!)
         let response = try JSONDecoder().decode(AVPFrameResponse.self, from: data)
         let ts = response.timestamp.map { Date(timeIntervalSince1970: $0) }
         let age = response.age_seconds.map { String(format: "%.2fs age", $0) } ?? "—"
@@ -220,7 +228,9 @@ private extension DebugDashboardModel {
     }
 
     func fetchAVPAruco(baseURL: URL) async throws -> FrameState {
-        let data = try await performRequest(baseURL: baseURL, path: "get_avp_aruco_frame")
+        var comps = URLComponents(url: baseURL.appendingPathComponent("get_avp_aruco_frame"), resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "purpose", value: "aruco_calibration")]
+        let data = try await performRequest(url: comps.url!)
         let response = try JSONDecoder().decode(ArucoResponse.self, from: data)
         let ts = response.timestamp.map { Date(timeIntervalSince1970: $0) }
         let markers = response.markers_detected ?? 0
@@ -256,6 +266,10 @@ private extension DebugDashboardModel {
 
     func performRequest(baseURL: URL, path: String) async throws -> Data {
         let url = baseURL.appendingPathComponent(path)
+        return try await performRequest(url: url)
+    }
+
+    func performRequest(url: URL) async throws -> Data {
         let (data, response) = try await URLSession.shared.data(from: url)
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
@@ -297,6 +311,7 @@ struct DebugDashboardView: View {
                     connectionStatus
                     matricesSection
                     framesSection
+                    logsSection
                     sensorSection
                     if let error = model.lastError {
                         Text(error)
@@ -321,8 +336,7 @@ struct DebugDashboardView: View {
             }
             .task {
                 model.updateBaseURL(appModel.baseURL)
-                autoRefresh = true
-                model.startPolling()
+                autoRefresh = false
             }
             .onChange(of: appModel.baseURL) { model.updateBaseURL($0) }
             .onDisappear { model.stop() }
@@ -366,6 +380,7 @@ struct DebugDashboardView: View {
             MatrixCard(title: "T_avp_rs", matrix: model.transforms.avpRS)
             MatrixCard(title: "T_world_rs", matrix: model.transforms.worldRS)
             MatrixCard(title: "T_world_avp", matrix: model.transforms.worldAVP)
+            MatrixCard(title: "AVP ArUco Pose", matrix: model.transforms.avpBoard ?? model.avpBoardPose)
             MatrixCard(title: "RS Pose in AVP", matrix: model.poseInAVP.matrix)
             if let age = model.poseInAVP.headPoseAge {
                 Text("Head pose age: \(String(format: "%.2f s", age))")
@@ -389,6 +404,26 @@ struct DebugDashboardView: View {
                 FrameCard(title: "AVP Latest", state: model.avpFrame)
                 FrameCard(title: "AVP ArUco", state: model.avpArucoFrame)
             }
+        }
+        .padding()
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var logsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Logs").font(.headline)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(logs.lines.suffix(120).enumerated()), id: \.offset) { _, line in
+                        Text(line)
+                            .font(.system(.caption, design: .monospaced))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            .frame(maxHeight: 220)
         }
         .padding()
         .background(.thinMaterial)

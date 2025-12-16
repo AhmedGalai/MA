@@ -82,6 +82,8 @@ last_rs_depth = None
 last_rs_timestamp = None
 last_rs_K = None
 selected_model = None
+last_avp_frames = {}
+last_avp_board_pose = None
 
 def ensure_coordinate_manager():
     """Ensure coordinate_manager is initialized with a safe default."""
@@ -125,6 +127,35 @@ def get_latest_rs_frame(allow_cache=True):
         last_rs_timestamp = frame_data.get('timestamp', time.time())
 
     return frame_data, using_cache
+
+
+def store_avp_frame(frame_np, timestamp, purpose):
+    global last_avp_frame, last_avp_frame_timestamp, last_avp_frame_metadata, last_avp_frames
+    last_avp_frame = frame_np
+    last_avp_frame_timestamp = timestamp
+    last_avp_frame_metadata['width'] = frame_np.shape[1]
+    last_avp_frame_metadata['height'] = frame_np.shape[0]
+    last_avp_frame_metadata['receive_time'] = time.time()
+    if purpose not in last_avp_frames:
+        last_avp_frames[purpose] = {}
+    last_avp_frames[purpose] = {
+        'frame': frame_np,
+        'timestamp': timestamp,
+        'meta': last_avp_frame_metadata.copy()
+    }
+
+
+def get_avp_frame_for_purpose(purpose: str):
+    """Return (frame, timestamp, meta) for a given purpose with fallback."""
+    global last_avp_frames, last_avp_frame, last_avp_frame_timestamp, last_avp_frame_metadata
+    # Prefer specific purpose
+    if purpose in last_avp_frames:
+        entry = last_avp_frames[purpose]
+        return entry.get('frame'), entry.get('timestamp'), entry.get('meta')
+    # Fallback to last general
+    if last_avp_frame is not None:
+        return last_avp_frame, last_avp_frame_timestamp, last_avp_frame_metadata
+    return None, None, None
 
 # Calibration buffers for intrinsics calculation
 class IntrinsicsCalibBuffer:
@@ -938,16 +969,11 @@ def receive_frame():
             return jsonify({'error': f'Failed to decode frame: {e}'}), 400
 
         # Store frame with metadata
-        with state_lock:
-            last_avp_frame = frame_np
-            timestamp = data.get('timestamp', time.time())
-            last_avp_frame_timestamp = timestamp
-            last_avp_frame_metadata['width'] = frame_np.shape[1]
-            last_avp_frame_metadata['height'] = frame_np.shape[0]
-            last_avp_frame_metadata['receive_time'] = time.time()
-
-        # Get purpose (for logging)
         purpose = data.get('purpose', 'general')
+        timestamp = data.get('timestamp', time.time())
+        with state_lock:
+            store_avp_frame(frame_np, timestamp, purpose)
+
         logger.debug(f"AVP frame received: {purpose}, shape: {frame_np.shape}, ts: {timestamp}")
 
         return jsonify({'success': True, 'timestamp': timestamp}), 200
@@ -1033,16 +1059,16 @@ def get_avp_latest_frame():
         }
     """
     try:
+        purpose = request.args.get('purpose', 'general')
         with state_lock:
-            if last_avp_frame is None:
-                return jsonify({'error': 'No AVP frame available'}), 404
-
-            frame = last_avp_frame.copy()
-            timestamp = last_avp_frame_timestamp
-            metadata = last_avp_frame_metadata.copy()
+            frame, timestamp, metadata = get_avp_frame_for_purpose(purpose)
+            if frame is None:
+                return jsonify({'error': f'No AVP frame available for {purpose}'}), 404
+            frame = frame.copy()
+            metadata = metadata.copy() if metadata else {}
 
         # Calculate age
-        age = time.time() - metadata['receive_time'] if metadata['receive_time'] else 0
+        age = time.time() - metadata.get('receive_time', time.time())
 
         # Convert BGR to JPEG
         _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
@@ -1052,8 +1078,9 @@ def get_avp_latest_frame():
             'rgb': f'data:image/jpeg;base64,{rgb_b64}',
             'timestamp': timestamp,
             'age_seconds': age,
-            'width': metadata['width'],
-            'height': metadata['height']
+            'width': metadata.get('width'),
+            'height': metadata.get('height'),
+            'purpose': purpose
         }), 200
 
     except Exception as e:
@@ -1083,12 +1110,12 @@ def get_avp_aruco_frame():
     global avp_intrinsics, avp_calib_buffer
 
     try:
+        purpose = request.args.get('purpose', 'aruco_calibration')
         with state_lock:
-            if last_avp_frame is None:
-                return jsonify({'error': 'No AVP frame available'}), 404
-
-            frame = last_avp_frame.copy()
-            timestamp = last_avp_frame_timestamp
+            frame, timestamp, _ = get_avp_frame_for_purpose(purpose)
+            if frame is None:
+                return jsonify({'error': f'No AVP frame available for {purpose}'}), 404
+            frame = frame.copy()
 
         # Import ArUco detector
         from aruco_detector import ArucoDetector
@@ -1097,6 +1124,7 @@ def get_avp_aruco_frame():
         detector = ArucoDetector()
         corners, ids = detector.detect_markers(frame)
 
+        pose_matrix = None
         # Draw detected markers
         if corners is not None and ids is not None:
             cv2.aruco.drawDetectedMarkers(frame, corners, ids)
@@ -1121,15 +1149,28 @@ def get_avp_aruco_frame():
                 CONFIG["aruco"]["cols"]
             )
 
+            # Estimate pose
+            K = avp_intrinsics['K']
+            if K is None:
+                K_default, dist = ArucoDetector.create_default_camera_matrix(frame.shape[1], frame.shape[0])
+                cam_K = K_default
+            else:
+                dist = np.zeros((5, 1), dtype=np.float32)
+                cam_K = K
+            pose = detector.estimate_board_pose(corners, ids, cam_K, dist)
+            if pose is not None:
+                rvec, tvec = pose
+                pose_matrix = detector.pose_to_transformation_matrix(rvec, tvec)
+
             # Try to calculate intrinsics
             if avp_calib_buffer.ready() and not avp_intrinsics['calculated']:
-                K = avp_calib_buffer.calibrate()
-                if K is not None:
-                    avp_intrinsics['K'] = K
+                K_calc = avp_calib_buffer.calibrate()
+                if K_calc is not None:
+                    avp_intrinsics['K'] = K_calc
                     avp_intrinsics['calculated'] = True
                     avp_intrinsics['method'] = 'aruco_calibration'
                     avp_intrinsics['timestamp'] = time.time()
-                    logger.info(f"AVP intrinsics calculated: fx={K[0,0]:.1f}, fy={K[1,1]:.1f}")
+                    logger.info(f"AVP intrinsics calculated: fx={K_calc[0,0]:.1f}, fy={K_calc[1,1]:.1f}")
 
                     # Draw notification
                     cv2.putText(frame, "AVP Intrinsics Calculated!",
@@ -1151,8 +1192,15 @@ def get_avp_aruco_frame():
             'timestamp': timestamp,
             'intrinsics_calculated': avp_intrinsics['calculated'],
             'K': avp_intrinsics['K'].tolist() if avp_intrinsics['K'] is not None else None,
-            'samples_collected': len(avp_calib_buffer.imgpoints)
+            'samples_collected': len(avp_calib_buffer.imgpoints),
+            'pose_matrix': pose_matrix.tolist() if pose_matrix is not None else None,
+            'purpose': purpose
         }
+
+        with state_lock:
+            if pose_matrix is not None:
+                global last_avp_board_pose
+                last_avp_board_pose = pose_matrix.copy()
 
         return jsonify(response), 200
 

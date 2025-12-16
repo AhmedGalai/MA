@@ -22,9 +22,6 @@ struct PoseOverlayWithStreamingApp: App {
         .environmentObject(settings)
         .environmentObject(logs)
 
-        WindowGroup("Logs", id: "logs") { LogsView() }
-            .environmentObject(logs)
-
         WindowGroup("Sensor Monitor", id: "sensors") {
             SensorMonitorView()
         }
