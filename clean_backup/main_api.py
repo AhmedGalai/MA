@@ -81,6 +81,50 @@ last_rs_frame = None
 last_rs_depth = None
 last_rs_timestamp = None
 last_rs_K = None
+selected_model = None
+
+def ensure_coordinate_manager():
+    """Ensure coordinate_manager is initialized with a safe default."""
+    global coordinate_manager
+    if coordinate_manager is None:
+        try:
+            coordinate_manager = CoordinateManager(T_world_rs=np.eye(4))
+            logger.warning("CoordinateManager initialized with identity T_world_rs (no calibration file found)")
+        except Exception as e:
+            logger.error(f"Failed to initialize CoordinateManager fallback: {e}")
+
+def get_latest_rs_frame(allow_cache=True):
+    """
+    Try to capture an RS frame; optionally fall back to cached frame.
+    Returns (frame_data, using_cache: bool) or (None, False) if unavailable.
+    """
+    global last_rs_frame, last_rs_depth, last_rs_timestamp, last_rs_K
+
+    frame_data = None
+    using_cache = False
+
+    rs_ready = realsense_client is not None and realsense_client.is_running
+    if rs_ready:
+        frame_data = realsense_client.capture()
+
+    if frame_data is None and allow_cache and last_rs_frame is not None and last_rs_depth is not None:
+        frame_data = {
+            'rgb': last_rs_frame.copy(),
+            'depth': last_rs_depth.copy(),
+            'K': last_rs_K.copy() if last_rs_K is not None else None,
+            'timestamp': last_rs_timestamp
+        }
+        using_cache = True
+
+    if frame_data is not None and not using_cache:
+        last_rs_frame = frame_data['rgb'].copy()
+        if 'depth' in frame_data and frame_data['depth'] is not None:
+            last_rs_depth = frame_data['depth'].copy()
+        if frame_data.get('K') is not None:
+            last_rs_K = frame_data['K'].copy()
+        last_rs_timestamp = frame_data.get('timestamp', time.time())
+
+    return frame_data, using_cache
 
 # Calibration buffers for intrinsics calculation
 class IntrinsicsCalibBuffer:
@@ -201,6 +245,9 @@ def initialize_api():
 
     # Initialize CoordinateManager
     try:
+        if T_world_rs is None:
+            T_world_rs = np.eye(4, dtype=np.float64)
+            logger.warning("No T_world_rs calibration found. Using identity until calibrated.")
         coordinate_manager = CoordinateManager(T_world_rs=T_world_rs)
         logger.info("CoordinateManager initialized")
     except Exception as e:
@@ -220,6 +267,7 @@ def health():
     """
     with state_lock:
         rs_connected = realsense_client is not None and realsense_client.is_running
+        ensure_coordinate_manager()
         calibrated = coordinate_manager is not None and coordinate_manager.is_calibrated()
 
     return jsonify({
@@ -243,32 +291,7 @@ def get_rgbd_frame():
         }
     """
     try:
-        with state_lock:
-            rs_ready = realsense_client is not None and realsense_client.is_running
-
-        frame_data = None
-        if rs_ready:
-            frame_data = realsense_client.capture()
-
-        # Fallback to last cached frame if capture failed or RS not ready
-        using_cache = False
-        if frame_data is None:
-            with state_lock:
-                if last_rs_frame is not None and last_rs_depth is not None:
-                    frame_data = {
-                        'rgb': last_rs_frame.copy(),
-                        'depth': last_rs_depth.copy(),
-                        'K': last_rs_K.copy() if last_rs_K is not None else None,
-                        'timestamp': last_rs_timestamp
-                    }
-                    using_cache = True
-        else:
-            with state_lock:
-                last_rs_frame = frame_data['rgb'].copy()
-                last_rs_depth = frame_data['depth'].copy()
-                last_rs_K = frame_data['K'].copy()
-                last_rs_timestamp = frame_data['timestamp']
-
+        frame_data, using_cache = get_latest_rs_frame(allow_cache=True)
         if frame_data is None:
             return jsonify({'error': 'RealSense not connected or no frames available'}), 503
 
@@ -305,6 +328,32 @@ def get_rgbd_frame():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/rgb_frame', methods=['GET'])
+def get_rgb_frame():
+    """
+    Return only the RGB frame (base64 JPEG) for compatibility with clients expecting /rgb_frame.
+    """
+    try:
+        frame_data, using_cache = get_latest_rs_frame(allow_cache=True)
+        if frame_data is None:
+            return jsonify({'error': 'RealSense not connected or no frames available'}), 503
+
+        rgb = frame_data['rgb']
+        ok_rgb, rgb_buffer = cv2.imencode('.jpg', rgb, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        if not ok_rgb:
+            raise RuntimeError("Failed to encode RGB frame")
+        rgb_b64 = base64.b64encode(rgb_buffer).decode('utf-8')
+
+        return jsonify({
+            'frame': f'data:image/jpeg;base64,{rgb_b64}',
+            'timestamp': frame_data.get('timestamp', time.time()),
+            'stale': using_cache
+        }), 200
+    except Exception as e:
+        logger.error(f\"Error getting RGB frame: {e}\", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/get_aruco_frame', methods=['GET'])
 def get_aruco_frame():
     """
@@ -320,36 +369,12 @@ def get_aruco_frame():
         }
     """
     try:
-        with state_lock:
-            rs_ready = realsense_client is not None and realsense_client.is_running
-
-        frame_data = None
-        if rs_ready:
-            frame_data = realsense_client.capture()
-
-        using_cache = False
-        if frame_data is None:
-            with state_lock:
-                if last_rs_frame is not None:
-                    frame_data = {
-                        'rgb': last_rs_frame.copy(),
-                        'K': last_rs_K.copy() if last_rs_K is not None else None,
-                        'timestamp': last_rs_timestamp
-                    }
-                    using_cache = True
-
+        frame_data, using_cache = get_latest_rs_frame(allow_cache=True)
         if frame_data is None:
             return jsonify({'error': 'RealSense not connected or no frames available'}), 503
 
         rgb = frame_data['rgb'].copy()  # BGR format from RealSense
         K = frame_data.get('K')
-
-        if not using_cache:
-            with state_lock:
-                last_rs_frame = frame_data['rgb'].copy()
-                if frame_data.get('K') is not None:
-                    last_rs_K = frame_data['K'].copy()
-                last_rs_timestamp = frame_data.get('timestamp', time.time())
 
         # Import ArUco detector
         from aruco_detector import ArucoDetector
@@ -448,6 +473,25 @@ def models():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/select_model', methods=['POST'])
+def select_model():
+    """
+    Set the active model (compat endpoint for VisionOS client).
+    """
+    global selected_model
+    try:
+        data = request.get_json() or {}
+        name = data.get('model_name') or data.get('name')
+        if not name:
+            return jsonify({'error': 'model_name is required'}), 400
+        selected_model = str(name)
+        logger.info(f\"Selected model set to {selected_model}\")
+        return jsonify({'success': True, 'model_name': selected_model}), 200
+    except Exception as e:
+        logger.error(f\"Error selecting model: {e}\", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/head_pose', methods=['POST'])
 def head_pose():
     """
@@ -488,6 +532,7 @@ def head_pose():
         quaternion = np.array(quaternion, dtype=np.float32)
 
         with state_lock:
+            ensure_coordinate_manager()
             # Store head pose data globally
             global last_head_pose, last_head_pose_metadata
             last_head_pose = {
@@ -543,6 +588,7 @@ def get_head_pose():
     """
     try:
         with state_lock:
+            ensure_coordinate_manager()
             if last_head_pose is None:
                 return jsonify({'error': 'No head pose data available'}), 404
 
@@ -1175,25 +1221,22 @@ def get_transformation():
     """
     try:
         with state_lock:
+            ensure_coordinate_manager()
             if coordinate_manager is None:
                 return jsonify({'error': 'CoordinateManager not initialized'}), 500
-
-            if not coordinate_manager.is_calibrated():
-                return jsonify({
-                    'calibrated': False,
-                    'T_avp_rs': None,
-                    'message': 'System not calibrated. Detect ArUco board in both cameras.'
-                }), 200
 
             # Get transformation from world to both cameras
             T_world_rs = coordinate_manager.T_world_rs
             T_world_avp = coordinate_manager.T_world_avp
 
-            if T_world_rs is None or T_world_avp is None:
+            if T_world_avp is None:
                 return jsonify({
                     'calibrated': False,
-                    'T_avp_rs': None,
-                    'message': 'Missing calibration data'
+                    'T_avp_rs': np.eye(4).tolist(),
+                    'message': 'System not calibrated. Detect ArUco board in both cameras.',
+                    'T_world_rs': T_world_rs.tolist(),
+                    'T_world_avp': None,
+                    'timestamp': time.time()
                 }), 200
 
             # Calculate T_avp_rs = T_avp_world * T_world_rs
@@ -1236,6 +1279,7 @@ def get_rs_pose_in_avp():
     """
     try:
         with state_lock:
+            ensure_coordinate_manager()
             if coordinate_manager is None:
                 return jsonify({'error': 'CoordinateManager not initialized'}), 500
 
@@ -1244,7 +1288,7 @@ def get_rs_pose_in_avp():
                     'calibrated': False,
                     'position': None,
                     'quaternion': None,
-                    'T_avp_rs': None,
+                    'T_avp_rs': np.eye(4).tolist(),
                     'message': 'System not calibrated. Perform ArUco calibration on both cameras.'
                 }), 200
 
@@ -1257,7 +1301,7 @@ def get_rs_pose_in_avp():
                     'calibrated': False,
                     'position': None,
                     'quaternion': None,
-                    'T_avp_rs': None,
+                    'T_avp_rs': np.eye(4).tolist(),
                     'message': 'Missing calibration data'
                 }), 200
 
