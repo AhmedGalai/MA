@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- App Transport Security: allow cleartext HTTP for local debugging endpoints -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsArbitraryLoads</key>
+    <false/>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+    <key>NSExceptionDomains</key>
+    <dict>
+      <key>127.0.0.1</key>
+      <dict>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key>
+        <true/>
+        <key>NSIncludesSubdomains</key>
+        <true/>
+        <key>NSRequiresCertificateTransparency</key>
+        <false/>
+      </dict>
+      <key>0.0.0.0</key>
+      <dict>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key>
+        <true/>
+        <key>NSIncludesSubdomains</key>
+        <true/>
+        <key>NSRequiresCertificateTransparency</key>
+        <false/>
+      </dict>
+      <key>localhost</key>
+      <dict>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key>
+        <true/>
+        <key>NSIncludesSubdomains</key>
+        <true/>
+        <key>NSRequiresCertificateTransparency</key>
+        <false/>
+      </dict>
+      <key>192.168.178.192</key>
+      <dict>
+        <key>NSExceptionAllowsInsecureHTTPLoads</key>
+        <true/>
+        <key>NSIncludesSubdomains</key>
+        <false/>
+        <key>NSRequiresCertificateTransparency</key>
+        <false/>
+      </dict>
+    </dict>
+  </dict>
+
+  <!-- Local network debugging and sensor usage -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>PoseOverlay communicates with the Python pose estimation service over your local network.</string>
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_http._tcp</string>
+  </array>
+  <key>NSCameraUsageDescription</key>
+  <string>Camera access is required for ARKit world tracking.</string>
+
+  <!-- visionOS scene configuration -->
+  <key>UIApplicationSceneManifest</key>
+  <dict>
+    <key>UIApplicationPreferredDefaultSceneSessionRole</key>
+    <string>UIWindowSceneSessionRoleApplication</string>
+    <key>UIApplicationSupportsMultipleScenes</key>
+    <true/>
+    <key>UISceneConfigurations</key>
+    <dict>
+      <key>UISceneSessionRoleApplication</key>
+      <array>
+        <dict/>
+      </array>
+      <key>UISceneSessionRoleImmersiveSpaceApplication</key>
+      <array>
+        <dict>
+          <!-- Full immersion by default; adjust if you prefer mixed -->
+          <key>UISceneInitialImmersionStyle</key>
+          <string>UIImmersionStyleFull</string>
+        </dict>
+      </array>
+    </dict>
+  </dict>
+</dict>
+</plist>

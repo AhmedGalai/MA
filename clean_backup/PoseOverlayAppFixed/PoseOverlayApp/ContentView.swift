@@ -229,6 +229,7 @@ struct ContentView: View {
                     Button("Open Logs Window") { openWindow(id: "logs") }
                 }
                 Button("Open Sensor Monitor") { openWindow(id: "sensors") }
+                Button("Open Debug Dashboard") { openWindow(id: "debug") }
             }
         }
     }
