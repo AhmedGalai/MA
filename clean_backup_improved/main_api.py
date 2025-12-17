@@ -381,7 +381,7 @@ def get_rgb_frame():
             'stale': using_cache
         }), 200
     except Exception as e:
-        logger.error(f\"Error getting RGB frame: {e}\", exc_info=True)
+        logger.error(f"Error getting RGB frame: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 
@@ -516,10 +516,10 @@ def select_model():
         if not name:
             return jsonify({'error': 'model_name is required'}), 400
         selected_model = str(name)
-        logger.info(f\"Selected model set to {selected_model}\")
+        logger.info(f"Selected model set to {selected_model}")
         return jsonify({'success': True, 'model_name': selected_model}), 200
     except Exception as e:
-        logger.error(f\"Error selecting model: {e}\", exc_info=True)
+        logger.error(f"Error selecting model: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 
