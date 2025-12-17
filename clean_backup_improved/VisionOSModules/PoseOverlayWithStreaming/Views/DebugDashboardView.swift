@@ -662,7 +662,7 @@ struct DebugDashboardView: View {
                 let age = Date().timeIntervalSince(avpFetchTime)
                 Text("AVP frames age: \(String(format: "%.1fs", age))")
                     .font(.caption)
-                    .foregroundStyle(age < 5 ? .secondary : .orange)
+                    .foregroundColor(age < 5 ? .secondary : .orange)
             }
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                 FrameCard(title: "RS RGB", state: model.rgbFrame)
