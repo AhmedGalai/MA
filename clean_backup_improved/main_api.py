@@ -2058,7 +2058,8 @@ if __name__ == '__main__':
             host=CONFIG["network"]["main_api_host"],
             port=CONFIG["network"]["main_api_port"],
             debug=True,
-            use_reloader=False  # Must be False to prevent camera re-initialization
+            use_reloader=False,  # Must be False to prevent camera re-initialization
+            #threaded=True
         )
 
     except KeyboardInterrupt:
