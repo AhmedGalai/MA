@@ -75,15 +75,6 @@
             ReferencedContainer = "container:PoseOverlayWithStreaming.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
-      <MacroExpansion>
-         <BuildableReference
-            BuildableIdentifier = "primary"
-            BlueprintIdentifier = "AA0000000000000000005001"
-            BuildableName = "PoseOverlayWithStreaming.app"
-            BlueprintName = "PoseOverlayWithStreaming"
-            ReferencedContainer = "container:PoseOverlayWithStreaming.xcodeproj">
-         </BuildableReference>
-      </MacroExpansion>
    </ProfileAction>
    <AnalyzeAction
       buildConfiguration = "Debug">

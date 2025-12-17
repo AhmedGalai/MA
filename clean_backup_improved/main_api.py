@@ -381,7 +381,7 @@ def get_rgb_frame():
             'stale': using_cache
         }), 200
     except Exception as e:
-        logger.error(f\"Error getting RGB frame: {e}\", exc_info=True)
+        logger.error(f"Error getting RGB frame: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 
@@ -516,10 +516,10 @@ def select_model():
         if not name:
             return jsonify({'error': 'model_name is required'}), 400
         selected_model = str(name)
-        logger.info(f\"Selected model set to {selected_model}\")
+        logger.info(f"Selected model set to {selected_model}")
         return jsonify({'success': True, 'model_name': selected_model}), 200
     except Exception as e:
-        logger.error(f\"Error selecting model: {e}\", exc_info=True)
+        logger.error(f"Error selecting model: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 
@@ -986,15 +986,15 @@ def receive_frame():
 @app.route('/capture_frame', methods=['POST'])
 def trigger_frame_capture():
     """
-    Trigger UxPlay frame capture.
+    Tag the latest AVP frame with a specific purpose.
 
     Query parameters:
         purpose: "aruco_calibration" | "roi_selection" | "general"
 
     Process:
-        1. Calls uxplay_capture.py to capture latest frame
-        2. Frame is sent to /receive_frame endpoint
-        3. Stored in global state
+        Since UxPlay streams frames continuously via uxplay_module.py,
+        this endpoint simply checks if a recent frame is available
+        and tags it with the specified purpose.
 
     Returns:
         JSON with success status
@@ -1002,41 +1002,33 @@ def trigger_frame_capture():
     purpose = request.args.get('purpose', 'general')
 
     try:
-        from uxplay_capture import UxPlayCapture
-        capture = UxPlayCapture()
+        with state_lock:
+            # Check if we have a recent AVP frame
+            if last_avp_frame is not None and last_avp_frame_metadata.get('receive_time'):
+                age = time.time() - last_avp_frame_metadata['receive_time']
 
-        success = capture.capture_and_send(purpose=purpose)
+                # Re-store the frame with the new purpose
+                store_avp_frame(
+                    last_avp_frame.copy(),
+                    last_avp_frame_metadata['receive_time'],
+                    purpose
+                )
 
-        if success:
-            logger.info(f"Frame captured for {purpose}")
-            return jsonify({
-                "success": True,
-                "message": f"Frame captured for {purpose}"
-            }), 200
-        else:
-            fallback_used = False
-            age = None
-            with state_lock:
-                if last_avp_frame is not None and last_avp_frame_metadata.get('receive_time'):
-                    fallback_used = True
-                    age = time.time() - last_avp_frame_metadata['receive_time']
-
-            if fallback_used:
-                logger.warning(f"Capture failed for {purpose}, serving cached AVP frame (age {age:.2f}s)")
+                logger.info(f"Tagged AVP frame for {purpose} (age: {age:.2f}s)")
                 return jsonify({
                     "success": True,
-                    "message": f"Used cached AVP frame (age {age:.2f}s) for {purpose}",
-                    "cached": True
+                    "message": f"Tagged AVP frame for {purpose}",
+                    "age_seconds": age
                 }), 200
-
-            logger.error(f"Frame capture failed for {purpose} (no cached AVP frame available)")
-            return jsonify({
-                "success": False,
-                "error": "Frame capture failed and no cached frame available"
-            }), 503
+            else:
+                logger.error(f"Frame capture failed for {purpose} (no AVP frame available)")
+                return jsonify({
+                    "success": False,
+                    "error": "No AVP frame available. Is UxPlay streaming?"
+                }), 503
 
     except Exception as e:
-        logger.error(f"Error triggering frame capture: {e}", exc_info=True)
+        logger.error(f"Error tagging frame: {e}", exc_info=True)
         return jsonify({
             "success": False,
             "error": str(e)
