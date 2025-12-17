@@ -772,6 +772,7 @@ private struct FrameCard: View {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
+                    .frame(minHeight: 200)
                     .cornerRadius(10)
                     .shadow(radius: 2)
             } else {
@@ -781,7 +782,7 @@ private struct FrameCard: View {
                     Text("No frame")
                         .foregroundStyle(.secondary)
                 }
-                .frame(height: 140)
+                .frame(height: 200)
             }
             Text(state.subtitle)
                 .font(.subheadline)
