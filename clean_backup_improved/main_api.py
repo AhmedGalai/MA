@@ -986,15 +986,14 @@ def receive_frame():
 @app.route('/capture_frame', methods=['POST'])
 def trigger_frame_capture():
     """
-    Tag the latest AVP frame with a specific purpose.
+    Capture a FRESH AVP frame with a specific purpose.
 
     Query parameters:
         purpose: "aruco_calibration" | "roi_selection" | "general"
 
     Process:
-        Since UxPlay streams frames continuously via uxplay_module.py,
-        this endpoint simply checks if a recent frame is available
-        and tags it with the specified purpose.
+        Waits for a fresh frame from UxPlay (captured AFTER this request)
+        instead of using stale cached frames.
 
     Returns:
         JSON with success status
@@ -1002,23 +1001,59 @@ def trigger_frame_capture():
     purpose = request.args.get('purpose', 'general')
 
     try:
+        # Record the request timestamp
+        request_time = time.time()
+
+        # Wait for a fresh frame (max 2 seconds)
+        max_wait = 2.0
+        poll_interval = 0.05  # 50ms
+        elapsed = 0.0
+
+        while elapsed < max_wait:
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+
+            with state_lock:
+                # Check if we have a frame that was received AFTER the request
+                if last_avp_frame is not None and last_avp_frame_metadata.get('receive_time'):
+                    frame_time = last_avp_frame_metadata['receive_time']
+
+                    if frame_time > request_time:
+                        # Fresh frame found! Tag it with the purpose
+                        store_avp_frame(
+                            last_avp_frame.copy(),
+                            frame_time,
+                            purpose
+                        )
+
+                        age = time.time() - frame_time
+                        logger.info(f"Captured FRESH AVP frame for {purpose} (age: {age:.2f}s, waited: {elapsed:.2f}s)")
+                        return jsonify({
+                            "success": True,
+                            "message": f"Captured fresh AVP frame for {purpose}",
+                            "age_seconds": age,
+                            "wait_time": elapsed
+                        }), 200
+
+        # Timeout - no fresh frame received
+        logger.warning(f"Timeout waiting for fresh AVP frame for {purpose} (waited {elapsed:.2f}s)")
+
+        # Fall back to cached frame if available
         with state_lock:
-            # Check if we have a recent AVP frame
             if last_avp_frame is not None and last_avp_frame_metadata.get('receive_time'):
                 age = time.time() - last_avp_frame_metadata['receive_time']
-
-                # Re-store the frame with the new purpose
                 store_avp_frame(
                     last_avp_frame.copy(),
                     last_avp_frame_metadata['receive_time'],
                     purpose
                 )
 
-                logger.info(f"Tagged AVP frame for {purpose} (age: {age:.2f}s)")
+                logger.warning(f"Using cached AVP frame for {purpose} (age: {age:.2f}s)")
                 return jsonify({
                     "success": True,
-                    "message": f"Tagged AVP frame for {purpose}",
-                    "age_seconds": age
+                    "message": f"Timeout - using cached frame (age: {age:.2f}s)",
+                    "age_seconds": age,
+                    "cached": True
                 }), 200
             else:
                 logger.error(f"Frame capture failed for {purpose} (no AVP frame available)")
@@ -1028,7 +1063,7 @@ def trigger_frame_capture():
                 }), 503
 
     except Exception as e:
-        logger.error(f"Error tagging frame: {e}", exc_info=True)
+        logger.error(f"Error capturing frame: {e}", exc_info=True)
         return jsonify({
             "success": False,
             "error": str(e)
