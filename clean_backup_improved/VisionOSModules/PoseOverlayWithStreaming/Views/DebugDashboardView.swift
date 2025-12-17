@@ -54,12 +54,24 @@ final class DebugDashboardModel: ObservableObject {
     @Published var rsArucoFrame = FrameState()
     @Published var avpFrame = FrameState()
     @Published var avpArucoFrame = FrameState()
+    @Published var transformedDepthFrame = FrameState()
+    @Published var avpROIFrame = FrameState()
+    @Published var roiMaskFrame = FrameState()
     @Published var intrinsics = IntrinsicsState()
     @Published var transforms = TransformState()
     @Published var poseInAVP = PoseInAVPState()
     @Published var avpBoardPose: [[Double]]?
     @Published var lastError: String?
     @Published var lastUpdate: Date?
+    @Published var avpLastFetchTime: Date?
+
+    // ROI and HSV parameters
+    @Published var roiX: Int = 0
+    @Published var roiY: Int = 0
+    @Published var roiWidth: Int = 320
+    @Published var roiHeight: Int = 240
+    @Published var hsvLower: [Int] = [0, 100, 100]
+    @Published var hsvUpper: [Int] = [10, 255, 255]
 
     private var baseURL: URL?
     private var pollTask: Task<Void, Never>?
@@ -71,6 +83,10 @@ final class DebugDashboardModel: ObservableObject {
 
     func manualRefresh() {
         Task { await fetchOnce() }
+    }
+
+    func fetchAVPFramesManually() {
+        Task { await fetchAVPData() }
     }
 
     func startPolling() {
@@ -94,21 +110,18 @@ final class DebugDashboardModel: ObservableObject {
     private func fetchOnce() async {
         guard let baseURL else { return }
         do {
+            // Only fetch RealSense data continuously (not AVP)
             async let healthTask = fetchHealth(baseURL: baseURL)
             async let rgbdTask = fetchRGBD(baseURL: baseURL)
             async let rsArucoTask = fetchRSAruco(baseURL: baseURL)
-            async let avpLatestTask = fetchAVPLatest(baseURL: baseURL)
-            async let avpArucoTask = fetchAVPAruco(baseURL: baseURL)
             async let intrinsicsTask = fetchIntrinsics(baseURL: baseURL)
             async let transformTask = fetchTransforms(baseURL: baseURL)
             async let poseInAVPTask = fetchPoseInAVP(baseURL: baseURL)
 
-            let (health, rgbd, rsAruco, avp, avpAruco, intrinsics, transforms, poseInAVP) = try await (
+            let (health, rgbd, rsAruco, intrinsics, transforms, poseInAVP) = try await (
                 healthTask,
                 rgbdTask,
                 rsArucoTask,
-                avpLatestTask,
-                avpArucoTask,
                 intrinsicsTask,
                 transformTask,
                 poseInAVPTask
@@ -118,19 +131,48 @@ final class DebugDashboardModel: ObservableObject {
             self.rgbFrame = rgbd.rgb
             self.depthFrame = rgbd.depth
             self.rsArucoFrame = rsAruco
-            self.avpFrame = avp
-            self.avpArucoFrame = avpAruco
             self.intrinsics = intrinsics
-            var t = transforms
-            t.avpBoard = avpAruco.poseMatrix
-            self.transforms = t
+            self.transforms = transforms
             self.poseInAVP = poseInAVP
-            self.avpBoardPose = avpAruco.poseMatrix
             self.lastError = nil
         } catch {
             lastError = error.localizedDescription
         }
         lastUpdate = Date()
+    }
+
+    private func fetchAVPData() async {
+        guard let baseURL else { return }
+        do {
+            // Fetch AVP frames manually (button-triggered)
+            async let avpLatestTask = fetchAVPLatest(baseURL: baseURL)
+            async let avpArucoTask = fetchAVPAruco(baseURL: baseURL)
+            async let transformedDepthTask = fetchTransformedDepth(baseURL: baseURL)
+            async let avpROITask = fetchAVPROI(baseURL: baseURL)
+            async let roiMaskTask = fetchROIMask(baseURL: baseURL)
+
+            let (avp, avpAruco, transformedDepth, avpROI, roiMask) = try await (
+                avpLatestTask,
+                avpArucoTask,
+                transformedDepthTask,
+                avpROITask,
+                roiMaskTask
+            )
+
+            self.avpFrame = avp
+            self.avpArucoFrame = avpAruco
+            self.transformedDepthFrame = transformedDepth
+            self.avpROIFrame = avpROI
+            self.roiMaskFrame = roiMask
+            var t = self.transforms
+            t.avpBoard = avpAruco.poseMatrix
+            self.transforms = t
+            self.avpBoardPose = avpAruco.poseMatrix
+            self.avpLastFetchTime = Date()
+            self.lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 }
 
@@ -266,6 +308,91 @@ private extension DebugDashboardModel {
                               headPoseAge: response.head_pose_age)
     }
 
+    func fetchTransformedDepth(baseURL: URL) async throws -> FrameState {
+        let data = try await performRequest(baseURL: baseURL, path: "get_transformed_depth")
+        struct Response: Decodable {
+            let depth_colormap: String
+            let timestamp: Double
+            let transformation_applied: Bool
+            let min_depth: Double?
+            let max_depth: Double?
+        }
+        let response = try JSONDecoder().decode(Response.self, from: data)
+        let ts = Date(timeIntervalSince1970: response.timestamp)
+        let transformedInfo = response.transformation_applied ? "Transformed" : "RS view (uncalibrated)"
+        let depthRange = [response.min_depth, response.max_depth].compactMap { $0 }.map { String(format: "%.2fm", $0) }.joined(separator: " - ")
+        let subtitle = "Transformed Depth"
+        let details = [transformedInfo, depthRange].filter { !$0.isEmpty }.joined(separator: " • ")
+        return FrameState(image: decodeImage(from: response.depth_colormap),
+                          subtitle: subtitle,
+                          details: details,
+                          timestamp: ts)
+    }
+
+    func fetchAVPROI(baseURL: URL) async throws -> FrameState {
+        var comps = URLComponents(url: baseURL.appendingPathComponent("get_roi_rgb"), resolvingAgainstBaseURL: false)!
+        comps.queryItems = [
+            URLQueryItem(name: "x", value: String(roiX)),
+            URLQueryItem(name: "y", value: String(roiY)),
+            URLQueryItem(name: "width", value: String(roiWidth)),
+            URLQueryItem(name: "height", value: String(roiHeight)),
+            URLQueryItem(name: "purpose", value: "roi_selection")
+        ]
+        let data = try await performRequest(url: comps.url!)
+        struct Response: Decodable {
+            let roi_rgb: String
+            let roi_x: Int
+            let roi_y: Int
+            let roi_width: Int
+            let roi_height: Int
+            let timestamp: Double
+        }
+        let response = try JSONDecoder().decode(Response.self, from: data)
+        let ts = Date(timeIntervalSince1970: response.timestamp)
+        let subtitle = "AVP ROI"
+        let details = "[\(response.roi_x),\(response.roi_y)] \(response.roi_width)×\(response.roi_height)"
+        return FrameState(image: decodeImage(from: response.roi_rgb),
+                          subtitle: subtitle,
+                          details: details,
+                          timestamp: ts)
+    }
+
+    func fetchROIMask(baseURL: URL) async throws -> FrameState {
+        let url = baseURL.appendingPathComponent("get_roi_binary_mask")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let payload: [String: Any] = [
+            "x": roiX,
+            "y": roiY,
+            "width": roiWidth,
+            "height": roiHeight,
+            "hsv_lower": hsvLower,
+            "hsv_upper": hsvUpper,
+            "purpose": "roi_selection"
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw DashboardError.badHTTPStatus((response as? HTTPURLResponse)?.statusCode ?? 0, "Request failed")
+        }
+        struct Response: Decodable {
+            let binary_mask: String
+            let mask_pixels: Int
+            let total_pixels: Int
+            let coverage: Double
+            let timestamp: Double
+        }
+        let decoded = try JSONDecoder().decode(Response.self, from: data)
+        let ts = Date(timeIntervalSince1970: decoded.timestamp)
+        let subtitle = "ROI Binary Mask"
+        let details = String(format: "Coverage: %.1f%% (%d/%d)", decoded.coverage, decoded.mask_pixels, decoded.total_pixels)
+        return FrameState(image: decodeImage(from: decoded.binary_mask),
+                          subtitle: subtitle,
+                          details: details,
+                          timestamp: ts)
+    }
+
     func performRequest(baseURL: URL, path: String) async throws -> Data {
         let url = baseURL.appendingPathComponent(path)
         return try await performRequest(url: url)
@@ -312,6 +439,8 @@ struct DebugDashboardView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     connectionStatus
                     matricesSection
+                    roiControlsSection
+                    hsvControlsSection
                     framesSection
                     logsSection
                     sensorSection
@@ -395,16 +524,154 @@ struct DebugDashboardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
+    private var roiControlsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("ROI Parameters")
+                .font(.headline)
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("X: \(model.roiX)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Slider(value: Binding(
+                        get: { Double(model.roiX) },
+                        set: { model.roiX = Int($0) }
+                    ), in: 0...1920, step: 10)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Y: \(model.roiY)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Slider(value: Binding(
+                        get: { Double(model.roiY) },
+                        set: { model.roiY = Int($0) }
+                    ), in: 0...1080, step: 10)
+                }
+            }
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Width: \(model.roiWidth)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Slider(value: Binding(
+                        get: { Double(model.roiWidth) },
+                        set: { model.roiWidth = Int($0) }
+                    ), in: 50...1920, step: 10)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Height: \(model.roiHeight)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Slider(value: Binding(
+                        get: { Double(model.roiHeight) },
+                        set: { model.roiHeight = Int($0) }
+                    ), in: 50...1080, step: 10)
+                }
+            }
+        }
+        .padding()
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var hsvControlsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("HSV Filter Parameters")
+                .font(.headline)
+            VStack(spacing: 8) {
+                HStack(spacing: 16) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("H min: \(model.hsvLower[0])")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Slider(value: Binding(
+                            get: { Double(model.hsvLower[0]) },
+                            set: { model.hsvLower[0] = Int($0) }
+                        ), in: 0...180, step: 1)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("H max: \(model.hsvUpper[0])")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Slider(value: Binding(
+                            get: { Double(model.hsvUpper[0]) },
+                            set: { model.hsvUpper[0] = Int($0) }
+                        ), in: 0...180, step: 1)
+                    }
+                }
+                HStack(spacing: 16) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("S min: \(model.hsvLower[1])")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Slider(value: Binding(
+                            get: { Double(model.hsvLower[1]) },
+                            set: { model.hsvLower[1] = Int($0) }
+                        ), in: 0...255, step: 1)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("S max: \(model.hsvUpper[1])")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Slider(value: Binding(
+                            get: { Double(model.hsvUpper[1]) },
+                            set: { model.hsvUpper[1] = Int($0) }
+                        ), in: 0...255, step: 1)
+                    }
+                }
+                HStack(spacing: 16) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("V min: \(model.hsvLower[2])")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Slider(value: Binding(
+                            get: { Double(model.hsvLower[2]) },
+                            set: { model.hsvLower[2] = Int($0) }
+                        ), in: 0...255, step: 1)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("V max: \(model.hsvUpper[2])")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Slider(value: Binding(
+                            get: { Double(model.hsvUpper[2]) },
+                            set: { model.hsvUpper[2] = Int($0) }
+                        ), in: 0...255, step: 1)
+                    }
+                }
+            }
+        }
+        .padding()
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
     private var framesSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Frames")
-                .font(.headline)
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                FrameCard(title: "RealSense RGB", state: model.rgbFrame)
-                FrameCard(title: "Depth (colormap)", state: model.depthFrame)
-                FrameCard(title: "RealSense ArUco", state: model.rsArucoFrame)
-                FrameCard(title: "AVP Latest", state: model.avpFrame)
-                FrameCard(title: "AVP ArUco", state: model.avpArucoFrame)
+            HStack {
+                Text("Frames")
+                    .font(.headline)
+                Spacer()
+                Button("Fetch AVP Frames") {
+                    model.fetchAVPFramesManually()
+                }
+                .buttonStyle(.bordered)
+                .disabled(model.health.ok == false)
+            }
+            if let avpFetchTime = model.avpLastFetchTime {
+                let age = Date().timeIntervalSince(avpFetchTime)
+                Text("AVP frames age: \(String(format: "%.1fs", age))")
+                    .font(.caption)
+                    .foregroundStyle(age < 5 ? .secondary : .orange)
+            }
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                FrameCard(title: "RS RGB", state: model.rgbFrame)
+                FrameCard(title: "RS Depth", state: model.depthFrame)
+                FrameCard(title: "RS ArUco", state: model.rsArucoFrame)
+                FrameCard(title: "Transformed Depth", state: model.transformedDepthFrame)
+                FrameCard(title: "AVP Aruco", state: model.avpArucoFrame)
+                FrameCard(title: "AVP ROI", state: model.avpROIFrame)
+                FrameCard(title: "ROI Mask", state: model.roiMaskFrame)
             }
         }
         .padding()
