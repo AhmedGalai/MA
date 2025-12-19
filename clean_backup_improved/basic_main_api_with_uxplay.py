@@ -38,6 +38,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger("basic_main_api_with_uxplay")
 
+# Head pose storage (from visionOS)
+head_pose_latest = None
+head_pose_meta = {
+    "receive_time": None,
+    "reception_count": 0,
+    "last_reception_time": None,
+    "reception_rate": None,
+}
+head_pose_lock = threading.Lock()
+
 
 # -----------------------------
 # ArUco config (edit as needed)
@@ -87,7 +97,6 @@ class UxPlayCapture:
     def start(self) -> None:
         if self.running:
             return
-
         frame_pipeline = "videoconvert ! video/x-raw,format=BGR ! fdsink fd=1 sync=false"
         cmd = [
             self.uxplay_binary,
@@ -339,6 +348,91 @@ class ArucoProcessor:
             )
         return corners, ids
 
+    def _estimate_board_pose(self, corners, ids, frame_bgr=None):
+        """
+        Try cv2.aruco.estimatePoseBoard if available, otherwise fall back to solvePnP
+        with board corner correspondences. If that is unavailable, fall back to
+        per-marker pose (first detected marker).
+        """
+        # Normalize ids to 1D ints for matching
+        ids = ids.flatten().astype(int)
+        # Preferred API
+        if hasattr(cv2.aruco, "estimatePoseBoard"):
+            try:
+                return cv2.aruco.estimatePoseBoard(
+                    corners, ids, self.board, self.K, self.dist, None, None
+                )
+            except Exception:
+                pass
+
+        # Fallback: single-marker pose (first marker)
+        try:
+            if hasattr(cv2.aruco, "estimatePoseSingleMarkers"):
+                rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
+                    corners, self.cfg.marker_size_m, self.K, self.dist
+                )
+                if rvecs is not None and len(rvecs) > 0:
+                    return True, rvecs[0].reshape(3, 1), tvecs[0].reshape(3, 1)
+        except Exception:
+            pass
+
+        # Fallback: manual single-marker solvePnP using the first marker
+        try:
+            s = float(self.cfg.marker_size_m)
+            obj_pts = np.array([
+                [0.0, 0.0, 0.0],
+                [s, 0.0, 0.0],
+                [s, s, 0.0],
+                [0.0, s, 0.0],
+            ], dtype=np.float32)
+
+            img_pts = np.asarray(corners[0], dtype=np.float32).reshape(-1, 2)
+            if img_pts.shape[0] >= 4:
+                ok, rvec, tvec = cv2.solvePnP(
+                    obj_pts,
+                    img_pts,
+                    self.K,
+                    self.dist,
+                    flags=cv2.SOLVEPNP_IPPE_SQUARE if hasattr(cv2, "SOLVEPNP_IPPE_SQUARE") else cv2.SOLVEPNP_ITERATIVE
+                )
+                if ok:
+                    return ok, rvec, tvec
+        except Exception:
+            pass
+
+        # Fallback: manual solvePnP using board.objPoints mapping to detected ids
+        try:
+            obj_pts = []
+            img_pts = []
+            board_ids = np.array(self.board.ids).flatten() if hasattr(self.board, "ids") else np.array([])
+            for corner, marker_id in zip(corners, ids.flatten()):
+                if board_ids.size == 0:
+                    continue
+                matches = np.where(board_ids == marker_id)[0]
+                if len(matches) == 0:
+                    continue
+                obj = np.asarray(self.board.objPoints[matches[0]], dtype=np.float32).reshape(-1, 3)
+                img = np.asarray(corner, dtype=np.float32).reshape(-1, 2)
+                obj_pts.append(obj)
+                img_pts.append(img)
+
+            if len(obj_pts) >= 1:
+                obj_pts = np.vstack(obj_pts)
+                img_pts = np.vstack(img_pts)
+                ok, rvec, tvec = cv2.solvePnP(
+                    obj_pts,
+                    img_pts,
+                    self.K,
+                    self.dist,
+                    flags=cv2.SOLVEPNP_ITERATIVE
+                )
+                if ok:
+                    return ok, rvec, tvec
+        except Exception:
+            pass
+
+        return False, None, None
+
     def _loop(self):
         logger.info("Aruco processor thread started (fps=%.2f)", self.process_fps)
         period = 1.0 / max(0.1, self.process_fps)
@@ -379,13 +473,10 @@ class ArucoProcessor:
 
                     cv2.aruco.drawDetectedMarkers(annotated, corners, ids)
 
-                    # Board pose estimate
-                    # Returns: retval, rvec, tvec
-                    retval, rvec, tvec = cv2.aruco.estimatePoseBoard(
-                        corners, ids, self.board, self.K, self.dist, None, None
-                    )
+                    # Board pose estimate (new API first, then fallback)
+                    retval, rvec, tvec = self._estimate_board_pose(corners, ids, frame_bgr=annotated)
 
-                    if retval and rvec is not None and tvec is not None:
+                    if rvec is not None and tvec is not None:
                         T = _rvec_tvec_to_T(rvec, tvec)
                         quat = _rotmat_to_quat_xyzw(T[:3, :3])
 
@@ -395,10 +486,7 @@ class ArucoProcessor:
                         pose_payload["tvec"] = tvec.reshape(3).astype(float).tolist()
                         pose_payload["quaternion_xyzw"] = quat.astype(float).tolist()
 
-                        if self.cfg.draw_axes:
-                            cv2.drawFrameAxes(
-                                annotated, self.K, self.dist, rvec, tvec, self.cfg.axis_length_m
-                            )
+                        # Only draw marker highlights (axes removed to keep RGB clean)
 
                         self.detected_frames += 1
 
@@ -487,21 +575,115 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
             return jsonify({"error": "No frame available yet"}), 503
         return jsonify(out), 200
 
+    @app.route("/head_pose", methods=["POST"])
+    def head_pose():
+        """
+        Accept head pose updates from visionOS.
+
+        Expected JSON:
+          position: [x, y, z]
+          quaternion: [x, y, z, w]
+          timestamp: float (optional)
+        """
+        data = request.get_json(force=True, silent=True) or {}
+        position = data.get("position")
+        quaternion = data.get("quaternion")
+        timestamp = float(data.get("timestamp", time.time()))
+
+        if not (isinstance(position, list) and len(position) == 3
+                and isinstance(quaternion, list) and len(quaternion) == 4):
+            return jsonify({"error": "Invalid payload"}), 400
+
+        with head_pose_lock:
+            global head_pose_latest, head_pose_meta
+            head_pose_latest = {
+                "position": [float(x) for x in position],
+                "quaternion": [float(x) for x in quaternion],
+                "timestamp": timestamp
+            }
+            now = time.time()
+            head_pose_meta["receive_time"] = now
+            head_pose_meta["reception_count"] += 1
+            if head_pose_meta["last_reception_time"] is not None:
+                delta = now - head_pose_meta["last_reception_time"]
+                if delta > 0:
+                    head_pose_meta["reception_rate"] = 1.0 / delta
+            head_pose_meta["last_reception_time"] = now
+
+        return jsonify({"status": "ok"}), 200
+
+    @app.route("/get_head_pose", methods=["GET"])
+    def get_head_pose():
+        """
+        Return the most recent head pose (if any) along with age and reception stats.
+        """
+        with head_pose_lock:
+            if head_pose_latest is None:
+                return jsonify({"error": "No head pose received yet"}), 404
+            latest = dict(head_pose_latest)
+            meta = dict(head_pose_meta)
+
+        age = None
+        if meta.get("receive_time") is not None:
+            age = time.time() - meta["receive_time"]
+
+        latest.update({
+            "age_seconds": age,
+            "reception_count": meta.get("reception_count", 0),
+            "reception_rate": meta.get("reception_rate"),
+        })
+        return jsonify(latest), 200
+
     @app.route("/mjpeg", methods=["GET"])
     def mjpeg():
         """
-        Optional: MJPEG stream for quick debugging in a browser.
-        VisionOS can ignore this.
+        MJPEG stream with detection highlights; includes pose axes/text overlay if available.
         """
+        K = processor.K.copy()
+        dist = processor.dist.copy()
+
+        def draw_axes(frame, rvec, tvec, length=0.12):
+            try:
+                axes = np.float32([
+                    [0, 0, 0],
+                    [length, 0, 0],
+                    [0, length, 0],
+                    [0, 0, length],
+                ])
+                img_pts, _ = cv2.projectPoints(axes, rvec, tvec, K, dist)
+                pts = img_pts.reshape(-1, 2).astype(int)
+                origin = tuple(pts[0])
+                colors = [(0, 0, 255), (0, 255, 0), (255, 0, 0)]  # BGR
+                for i in range(1, 4):
+                    cv2.line(frame, origin, tuple(pts[i]), colors[i-1], 2, cv2.LINE_AA)
+            except Exception:
+                pass
+            return frame
+
         def gen():
             while True:
-                out = processor.get_rgb()
+                out = processor.get_aruco()
                 if out["rgb"] is None:
                     time.sleep(0.05)
                     continue
-                # strip data-url prefix
-                b64 = out["rgb"].split(",", 1)[1]
-                jpg = base64.b64decode(b64)
+
+                frame_b64 = out["rgb"].split(",", 1)[1]
+                frame = cv2.imdecode(np.frombuffer(base64.b64decode(frame_b64), dtype=np.uint8), cv2.IMREAD_COLOR)
+
+                pose = out.get("pose") or {}
+                if pose.get("detected") and pose.get("rvec") and pose.get("tvec"):
+                    rvec = np.array(pose["rvec"], dtype=np.float32).reshape(3, 1)
+                    tvec = np.array(pose["tvec"], dtype=np.float32).reshape(3, 1)
+                    frame = draw_axes(frame, rvec, tvec, length=processor.cfg.axis_length_m)
+                    text = f"Pose (m): x={tvec[0][0]:.3f} y={tvec[1][0]:.3f} z={tvec[2][0]:.3f}"
+                    cv2.putText(frame, text, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
+
+                ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                if not ok:
+                    time.sleep(0.05)
+                    continue
+                jpg = buf.tobytes()
+
                 yield (b"--frame\r\n"
                        b"Content-Type: image/jpeg\r\n"
                        b"Content-Length: " + str(len(jpg)).encode() + b"\r\n\r\n" +
@@ -547,7 +729,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Basic Main API with UxPlay (no forwarding)")
     parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=5000)
+    parser.add_argument("--port", type=int, default=8000)
 
     parser.add_argument("--uxplay-binary", default=None)
     parser.add_argument("--device-name", default="AirPlay-Pipeline")

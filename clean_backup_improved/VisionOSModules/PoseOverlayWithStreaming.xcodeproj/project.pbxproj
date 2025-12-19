@@ -28,6 +28,7 @@
 		AA0000000000000000001013 /* SensorMonitorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000002019 /* SensorMonitorView.swift */; };
 		AA0000000000000000001014 /* DebugDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000201A /* DebugDashboardView.swift */; };
 		AA0000000000000000001015 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000002020 /* Assets.xcassets */; };
+		AA0000000000000000001016 /* ArucoStreamModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000201B /* ArucoStreamModel.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -51,6 +52,7 @@
 		AA0000000000000000002018 /* ROIOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ROIOverlayView.swift; sourceTree = "<group>"; };
 		AA0000000000000000002019 /* SensorMonitorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensorMonitorView.swift; sourceTree = "<group>"; };
 		AA000000000000000000201A /* DebugDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugDashboardView.swift; sourceTree = "<group>"; };
+		AA000000000000000000201B /* ArucoStreamModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArucoStreamModel.swift; sourceTree = "<group>"; };
 		AA0000000000000000002020 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		AA0000000000000000002021 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA0000000000000000002022 /* PoseOverlayWithStreaming.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PoseOverlayWithStreaming.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -93,6 +95,7 @@
 				AA0000000000000000002005 /* ContentView.swift */,
 				AA0000000000000000002006 /* ImmersiveSpaceView.swift */,
 				AA0000000000000000002007 /* SensorDataModel.swift */,
+				AA000000000000000000201B /* ArucoStreamModel.swift */,
 				AA0000000000000000002008 /* SensorManager.swift */,
 				AA0000000000000000002009 /* APIHealthService.swift */,
 				AA0000000000000000000410 /* Models */,
@@ -232,6 +235,7 @@
 				AA0000000000000000001005 /* ContentView.swift in Sources */,
 				AA0000000000000000001006 /* ImmersiveSpaceView.swift in Sources */,
 				AA0000000000000000001007 /* SensorDataModel.swift in Sources */,
+				AA0000000000000000001016 /* ArucoStreamModel.swift in Sources */,
 				AA0000000000000000001008 /* SensorManager.swift in Sources */,
 				AA0000000000000000001009 /* APIHealthService.swift in Sources */,
 				AA000000000000000000100A /* PoseResponse.swift in Sources */,
