@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  uxplay:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: uxplay-airplay
+    # Use host network mode for proper AirPlay/mDNS discovery
+    network_mode: host
+    restart: unless-stopped
+
+    environment:
+      # UxPlay configuration
+      - UXPLAY_DEVICE_NAME=AirPlay-Pipeline
+      - UXPLAY_WIDTH=1920
+      - UXPLAY_HEIGHT=1080
+
+      # Main API configuration (adjust to your host IP)
+      - MAIN_API_HOST=192.168.178.68
+      - MAIN_API_PORT=8000
+
+      # Python
+      - PYTHONUNBUFFERED=1
+
+    volumes:
+      # Optional: mount frames directory for debugging
+      - ./frames:/app/frames
+
+      # Optional: mount config for runtime changes
+      - ./config.py:/app/config.py:ro
+
+    # Required capabilities for networking
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+
+    # Privileged mode may be needed for full network access
+    # Uncomment if AirPlay discovery doesn't work
+    # privileged: true
+
+    stdin_open: true
+    tty: true
+
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "uxplay"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
