@@ -7,6 +7,8 @@ echo "========================================"
 echo ""
 
 echo "Starting Avahi daemon for AirPlay discovery..."
+mkdir -p /var/run/dbus
+dbus-daemon --system --fork
 avahi-daemon --daemonize --no-drop-root
 sleep 2
 
