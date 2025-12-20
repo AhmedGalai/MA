@@ -6,31 +6,53 @@ struct ImmersiveSpaceView: View {
     @EnvironmentObject private var appModel: AppModel
     @EnvironmentObject private var sensorModel: SensorDataModel
     @EnvironmentObject private var arucoStream: ArucoStreamModel
+    @EnvironmentObject private var calibrationManager: CalibrationManager
 
     @State private var boardAxes: Entity?
-    @State private var headAxes: Entity?
-    @State private var headAnchor: AnchorEntity?
+    @State private var worldAnchor: AnchorEntity?
+
+    @State private var userTranslation: SIMD3<Float> = .zero
+    @State private var userRotation: simd_quatf = simd_quatf(angle: 0, axis: [0, 1, 0])
 
     var body: some View {
-        RealityView { content in
-            let anchor = AnchorEntity(.head)
-            //let anchor = AnchorEntity(.camera)
-            content.add(anchor)
-            headAnchor = anchor
+        ZStack(alignment: .bottom) {
+            RealityView { content in
+                let anchor = AnchorEntity(.world)
+                content.add(anchor)
+                worldAnchor = anchor
 
-            let boardAxesEntity = makeBoardAxesEntity()
-            boardAxesEntity.name = "BoardAxes"
-            boardAxesEntity.isEnabled = false
-            anchor.addChild(boardAxesEntity)
-            boardAxes = boardAxesEntity
+                let boardAxesEntity = makeBoardAxesEntity()
+                boardAxesEntity.name = "BoardAxes"
+                boardAxesEntity.isEnabled = false
+                anchor.addChild(boardAxesEntity)
+                boardAxes = boardAxesEntity
+            } update: { _ in
+                updateHeadPose()
+                updateBoardAxes()
+            }
+            .gesture(
+                DragGesture()
+                    .onChanged { value in
+                        let translation = value.translation
+                        userTranslation.x += Float(translation.width) * 0.001
+                        userTranslation.y -= Float(translation.height) * 0.001
+                    }
+            )
 
-            let headAxesEntity = makeAxesEntity(length: 0.12)
-            headAxesEntity.name = "HeadAxes"
-            headAxesEntity.isEnabled = false
-            anchor.addChild(headAxesEntity)
-            headAxes = headAxesEntity
-        } update: { _ in
-            updateBoardAxes()
+            HStack {
+                Button("Calibrate") {
+                    let calibrationMatrix = simd_float4x4(translation: userTranslation) * simd_float4x4(userRotation)
+                    calibrationManager.saveCalibration(transform: calibrationMatrix)
+                }
+                .padding()
+
+                Button("Clear Calibration") {
+                    calibrationManager.clearCalibration()
+                    userTranslation = .zero
+                    userRotation = simd_quatf(angle: 0, axis: [0, 1, 0])
+                }
+                .padding()
+            }
         }
         .task {
             appModel.setImmersiveSpacePresented(true)
@@ -40,26 +62,26 @@ struct ImmersiveSpaceView: View {
             appModel.setImmersiveSpacePresented(false)
         }
     }
+    
+    private func updateHeadPose() {
+        guard let worldAnchor else { return }
+        let headPose = Transform(
+            scale: .one,
+            rotation: sensorModel.headOrientation,
+            translation: sensorModel.headPosition
+        )
+        worldAnchor.transform = headPose.inverse
+    }
 
     private func updateBoardAxes() {
         guard let boardAxes else { return }
-        if let matrix = arucoStream.latestBoardTransform {
+        if let matrix = arucoStream.calibratedBoardTransform {
             boardAxes.isEnabled = true
-            boardAxes.transform = Transform(matrix: matrix)
+            let userTransform = Transform(scale: .one, rotation: userRotation, translation: userTranslation)
+            boardAxes.transform = Transform(matrix: matrix) * userTransform
         } else {
             boardAxes.isEnabled = false
         }
-    }
-
-    private func updateHeadAxes() {
-        guard let headAxes else { return }
-        let orientation = sensorModel.headOrientation
-        headAxes.transform.rotation = simd_quatf(
-            ix: Float(orientation.imag.x),
-            iy: Float(orientation.imag.y),
-            iz: Float(orientation.imag.z),
-            r: Float(orientation.real)
-        )
     }
 
     private func makeAxesEntity(length: Float) -> Entity {
@@ -108,5 +130,14 @@ struct ImmersiveSpaceView: View {
         root.addChild(yArrow)
         root.addChild(zArrow)
         return root
+    }
+}
+
+extension simd_float4x4 {
+    init(translation: SIMD3<Float>) {
+        self = matrix_identity_float4x4
+        columns.3.x = translation.x
+        columns.3.y = translation.y
+        columns.3.z = translation.z
     }
 }

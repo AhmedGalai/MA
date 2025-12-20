@@ -9,9 +9,21 @@ final class ArucoStreamModel: ObservableObject {
     @Published var lastTimestamp: Date?
     @Published var status: String = "Idle"
     @Published var latestPose: ArucoBoardPose?
-    @Published var latestBoardTransform: simd_float4x4?
+    @Published var calibratedBoardTransform: simd_float4x4?
+
+    private var latestBoardTransform: simd_float4x4? {
+        didSet {
+            applyCalibration()
+        }
+    }
+    
+    private let calibrationManager: CalibrationManager
 
     private var pollTask: Task<Void, Never>?
+    
+    init(calibrationManager: CalibrationManager) {
+        self.calibrationManager = calibrationManager
+    }
 
     func startStreaming(baseURL: URL) {
         stopStreaming()
@@ -70,6 +82,14 @@ final class ArucoStreamModel: ObservableObject {
             latestPose = nil
             latestBoardTransform = nil
         }
+    }
+    
+    private func applyCalibration() {
+        guard let latest = latestBoardTransform, let calibration = calibrationManager.calibrationTransform else {
+            calibratedBoardTransform = latestBoardTransform
+            return
+        }
+        calibratedBoardTransform = latest * calibration
     }
 
     private static func decodeImage(_ dataURL: String) -> UIImage? {
