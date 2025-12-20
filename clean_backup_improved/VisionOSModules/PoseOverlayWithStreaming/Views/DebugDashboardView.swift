@@ -61,9 +61,13 @@ final class DebugDashboardModel: ObservableObject {
     @Published var transforms = TransformState()
     @Published var poseInAVP = PoseInAVPState()
     @Published var avpBoardPose: [[Double]]?
+    @Published var foundationPoseMatrix: [[Double]]?
+    @Published var foundationPoseMessage: String?
     @Published var lastError: String?
     @Published var lastUpdate: Date?
     @Published var avpLastFetchTime: Date?
+
+    @Published var saveNextFoundationPose = false
 
     // HSV parameters (mean color + std deviation)
     @Published var hsvMeanH: Int = 90
@@ -87,8 +91,9 @@ final class DebugDashboardModel: ObservableObject {
         Task { await fetchOnce() }
     }
 
-    func fetchAVPFramesManually() {
-        Task { await fetchAVPData() }
+    func toggleSaveNextFoundationPose() {
+        saveNextFoundationPose.toggle()
+        postSaveNextFoundationPose(enabled: saveNextFoundationPose)
     }
 
     func startPolling() {
@@ -124,6 +129,7 @@ final class DebugDashboardModel: ObservableObject {
         async let intrinsicsTask = fetchIntrinsics(baseURL: baseURL)
         async let transformTask = fetchTransforms(baseURL: baseURL)
         async let poseInAVPTask = fetchPoseInAVP(baseURL: baseURL)
+        async let foundationPoseTask = fetchFoundationPose(baseURL: baseURL)
         async let hsvTask = fetchHSVConfig(baseURL: baseURL)
 
         do { self.health = try await healthTask } catch { errors.append(error.localizedDescription) }
@@ -141,6 +147,11 @@ final class DebugDashboardModel: ObservableObject {
         do { self.intrinsics = try await intrinsicsTask } catch { errors.append(error.localizedDescription) }
         do { self.transforms = try await transformTask } catch { errors.append(error.localizedDescription) }
         do { self.poseInAVP = try await poseInAVPTask } catch { errors.append(error.localizedDescription) }
+        do {
+            let fp = try await foundationPoseTask
+            foundationPoseMatrix = fp.poseMatrix
+            foundationPoseMessage = fp.message
+        } catch { errors.append(error.localizedDescription) }
         do { applyHSVConfig(try await hsvTask) } catch { errors.append(error.localizedDescription) }
 
         self.lastError = errors.isEmpty ? nil : errors.joined(separator: " | ")
@@ -158,6 +169,7 @@ final class DebugDashboardModel: ObservableObject {
         async let avpRSOverlayTask = fetchAVPRSOverlay(baseURL: baseURL)
         async let avpMaskTask = fetchAVPMask(baseURL: baseURL)
         async let hsvTask = fetchHSVConfig(baseURL: baseURL)
+        async let foundationPoseTask = fetchFoundationPose(baseURL: baseURL)
 
         do { self.avpFrame = try await avpLatestTask } catch { errors.append(error.localizedDescription) }
         do {
@@ -172,6 +184,11 @@ final class DebugDashboardModel: ObservableObject {
         do { self.avpRSOverlayFrame = try await avpRSOverlayTask } catch { errors.append(error.localizedDescription) }
         do { self.avpMaskFrame = try await avpMaskTask } catch { errors.append(error.localizedDescription) }
         do { applyHSVConfig(try await hsvTask) } catch { errors.append(error.localizedDescription) }
+        do {
+            let fp = try await foundationPoseTask
+            foundationPoseMatrix = fp.poseMatrix
+            foundationPoseMessage = fp.message
+        } catch { errors.append(error.localizedDescription) }
 
         self.avpLastFetchTime = Date()
         self.lastError = errors.isEmpty ? nil : errors.joined(separator: " | ")
@@ -212,6 +229,11 @@ private extension DebugDashboardModel {
         let head_pose_age: Double?
         let calibrated: Bool?
         let message: String?
+    }
+    struct FoundationPoseResponse: Decodable {
+        let pose_matrix: [[Double]]?
+        let message: String?
+        let success: Bool?
     }
     struct HSVConfigResponse: Decodable {
         let mean_h: Int
@@ -340,6 +362,12 @@ private extension DebugDashboardModel {
                               headPoseAge: response.head_pose_age)
     }
 
+    func fetchFoundationPose(baseURL: URL) async throws -> (poseMatrix: [[Double]]?, message: String?) {
+        let data = try await performRequest(baseURL: baseURL, path: "get_foundationpose_pose")
+        let response = try JSONDecoder().decode(FoundationPoseResponse.self, from: data)
+        return (poseMatrix: response.pose_matrix, message: response.message)
+    }
+
     func fetchTransformedDepth(baseURL: URL) async throws -> FrameState {
         let data = try await performRequest(baseURL: baseURL, path: "get_transformed_depth")
         struct Response: Decodable {
@@ -462,6 +490,18 @@ private extension DebugDashboardModel {
         let val = Double(max(0, min(255, v))) / 255.0
         return Color(hue: hue, saturation: sat, brightness: val)
     }
+
+    func postSaveNextFoundationPose(enabled: Bool) {
+        guard let baseURL else { return }
+        var request = URLRequest(url: baseURL.appendingPathComponent("foundationpose_save_next"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let payload: [String: Any] = ["enabled": enabled]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+        Task {
+            _ = try? await URLSession.shared.data(for: request)
+        }
+    }
 }
 
 // MARK: - View
@@ -550,8 +590,14 @@ struct DebugDashboardView: View {
             MatrixCard(title: "T_world_avp", matrix: model.transforms.worldAVP)
             MatrixCard(title: "AVP ArUco Pose", matrix: model.transforms.avpBoard ?? model.avpBoardPose)
             MatrixCard(title: "RS Pose in AVP", matrix: model.poseInAVP.matrix)
+            MatrixCard(title: "FoundationPose", matrix: model.foundationPoseMatrix)
             if let age = model.poseInAVP.headPoseAge {
                 Text("Head pose age: \(String(format: "%.2f s", age))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let msg = model.foundationPoseMessage, model.foundationPoseMatrix == nil {
+                Text("FoundationPose: \(msg)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -568,11 +614,10 @@ struct DebugDashboardView: View {
                 Text("Frames")
                     .font(.headline)
                 Spacer()
-                Button("Fetch AVP Frames") {
-                    model.fetchAVPFramesManually()
+                Button(model.saveNextFoundationPose ? "Save next request ✓" : "Save next request") {
+                    model.toggleSaveNextFoundationPose()
                 }
                 .buttonStyle(.bordered)
-                .disabled(model.health.ok == false)
             }
             if let avpFetchTime = model.avpLastFetchTime {
                 let age = Date().timeIntervalSince(avpFetchTime)
@@ -742,5 +787,6 @@ private struct MatrixCard: View {
         .padding()
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 10))
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

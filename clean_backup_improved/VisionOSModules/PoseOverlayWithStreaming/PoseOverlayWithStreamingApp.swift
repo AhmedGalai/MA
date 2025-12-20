@@ -7,6 +7,7 @@ struct PoseOverlayWithStreamingApp: App {
     @StateObject private var calibrationManager: CalibrationManager
     @StateObject private var arucoStream: ArucoStreamModel
     @StateObject private var rsPoseModel = RealSensePoseModel()
+    @StateObject private var foundationPoseModel = FoundationPoseModel()
     @StateObject private var logStore = LogStore()
     @StateObject private var arrowSettings = ArrowSettings()
 
@@ -23,6 +24,7 @@ struct PoseOverlayWithStreamingApp: App {
             .environmentObject(arucoStream)
             .environmentObject(calibrationManager)
             .environmentObject(rsPoseModel)
+            .environmentObject(foundationPoseModel)
             .environmentObject(logStore)
             .environmentObject(arrowSettings)
 
@@ -38,6 +40,7 @@ struct PoseOverlayWithStreamingApp: App {
             .environmentObject(appModel)
             .environmentObject(sensorModel)
             .environmentObject(arucoStream)
+            .environmentObject(foundationPoseModel)
             .environmentObject(logStore)
 
         ImmersiveSpace(id: "PoseSpace") { ImmersiveSpaceView() }
@@ -46,6 +49,7 @@ struct PoseOverlayWithStreamingApp: App {
             .environmentObject(arucoStream)
             .environmentObject(calibrationManager)
             .environmentObject(rsPoseModel)
+            .environmentObject(foundationPoseModel)
             .environmentObject(logStore)
     }
 }

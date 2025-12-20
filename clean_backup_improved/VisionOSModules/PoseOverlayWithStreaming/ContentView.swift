@@ -8,6 +8,7 @@ struct ContentView: View {
     @EnvironmentObject private var sensorModel: SensorDataModel
     @EnvironmentObject private var arucoStream: ArucoStreamModel
     @EnvironmentObject private var rsPoseModel: RealSensePoseModel
+    @EnvironmentObject private var foundationPoseModel: FoundationPoseModel
     @EnvironmentObject private var logs: LogStore
     @EnvironmentObject private var arrowSettings: ArrowSettings
 
@@ -193,6 +194,8 @@ struct ContentView: View {
         sensorModel.setAPIBaseURL(base)
         rsPoseModel.updateBaseURL(base)
         rsPoseModel.startPolling()
+        foundationPoseModel.updateBaseURL(base)
+        foundationPoseModel.startPolling()
         logs.add("API base set to \(urlString)")
         await MainActor.run {
             arucoStream.startStreaming(baseURL: base)

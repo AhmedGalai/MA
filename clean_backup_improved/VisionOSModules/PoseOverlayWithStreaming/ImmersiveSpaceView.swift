@@ -9,11 +9,15 @@ struct ImmersiveSpaceView: View {
     @EnvironmentObject private var arucoStream: ArucoStreamModel
     @EnvironmentObject private var calibrationManager: CalibrationManager
     @EnvironmentObject private var rsPoseModel: RealSensePoseModel
+    @EnvironmentObject private var foundationPoseModel: FoundationPoseModel
+    @EnvironmentObject private var logs: LogStore
 
     @State private var boardAxes: Entity?
     @State private var worldAnchor: AnchorEntity?
     @State private var anchorGizmo: Entity?
     @State private var rsAxes: Entity?
+    @State private var foundationAxes: Entity?
+    @State private var lastFoundationMessage: String?
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -38,10 +42,17 @@ struct ImmersiveSpaceView: View {
                 rsAxesEntity.isEnabled = false
                 anchor.addChild(rsAxesEntity)
                 rsAxes = rsAxesEntity
+
+                let foundationAxesEntity = makeFoundationPoseEntity()
+                foundationAxesEntity.name = "FoundationPoseAxes"
+                foundationAxesEntity.isEnabled = false
+                anchor.addChild(foundationAxesEntity)
+                foundationAxes = foundationAxesEntity
             } update: { _ in
                 updateBoardAxes()
                 updateWorldAnchorFromSliders()
                 updateRSPose()
+                updateFoundationPose()
             }
 
             HStack {
@@ -96,6 +107,20 @@ struct ImmersiveSpaceView: View {
             rsAxes.transform = Transform(matrix: matrix)
         } else {
             rsAxes.isEnabled = false
+        }
+    }
+
+    private func updateFoundationPose() {
+        guard let foundationAxes else { return }
+        if let matrix = foundationPoseModel.poseMatrix {
+            foundationAxes.isEnabled = true
+            foundationAxes.transform = Transform(matrix: matrix)
+        } else {
+            foundationAxes.isEnabled = false
+            if let msg = foundationPoseModel.lastMessage, msg != lastFoundationMessage {
+                lastFoundationMessage = msg
+                logs.add("FoundationPose: \(msg)")
+            }
         }
     }
 
@@ -205,6 +230,31 @@ struct ImmersiveSpaceView: View {
         root.addChild(zArrow)
 
         let label = makeTextLabel(text: "Realsense")
+        label.position = [0, 0.12, 0]
+        root.addChild(label)
+        return root
+    }
+
+    private func makeFoundationPoseEntity() -> Entity {
+        let root = Entity()
+        let scale: Float = 0.45
+
+        let xArrow = ArrowFactory.makeArrow(color: .red)
+        xArrow.transform.rotation = simd_quatf(angle: .pi / 2, axis: [0, 1, 0])
+        xArrow.scale = SIMD3<Float>(repeating: scale)
+
+        let yArrow = ArrowFactory.makeArrow(color: .green)
+        yArrow.transform.rotation = simd_quatf(angle: -.pi / 2, axis: [1, 0, 0])
+        yArrow.scale = SIMD3<Float>(repeating: scale)
+
+        let zArrow = ArrowFactory.makeArrow(color: .blue)
+        zArrow.scale = SIMD3<Float>(repeating: scale)
+
+        root.addChild(xArrow)
+        root.addChild(yArrow)
+        root.addChild(zArrow)
+
+        let label = makeTextLabel(text: "foundationpose")
         label.position = [0, 0.12, 0]
         root.addChild(label)
         return root

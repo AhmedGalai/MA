@@ -45,6 +45,7 @@ from realsense_client import RealSenseClient
 from aruco_detector import ArucoDetector
 from aruco_calibration import load_calibration
 from coordinate_manager import CoordinateManager
+from foundationpose_client import estimate_pose
 
 logging.basicConfig(
     level=logging.INFO,
@@ -99,6 +100,16 @@ avp_pose_latest = {
 
 coord_lock = threading.Lock()
 coordinate_manager: Optional[CoordinateManager] = None
+
+foundationpose_lock = threading.Lock()
+foundationpose_latest = {
+    "pose_matrix": None,
+    "timestamp": None,
+    "message": "FoundationPose not started",
+    "success": False,
+}
+foundationpose_save_lock = threading.Lock()
+foundationpose_save_next = False
 
 # -----------------------------
 # ArUco config (edit as needed)
@@ -854,6 +865,169 @@ def _get_T_avp_rs() -> Optional[np.ndarray]:
         return None
 
 
+def _get_selected_model() -> str:
+    if selected_model:
+        return selected_model
+    return CONFIG["processing"]["default_model"]
+
+
+def _consume_save_next_foundationpose() -> bool:
+    global foundationpose_save_next
+    with foundationpose_save_lock:
+        if foundationpose_save_next:
+            foundationpose_save_next = False
+            return True
+    return False
+
+
+def _save_foundationpose_request(
+    rgb: np.ndarray,
+    depth: np.ndarray,
+    mask: np.ndarray,
+    pose: Optional[np.ndarray],
+    meta: Dict[str, Any],
+) -> None:
+    try:
+        base_dir = os.path.join(CONFIG["uxplay"]["frame_dir"], "foundationpose")
+        os.makedirs(base_dir, exist_ok=True)
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        prefix = os.path.join(base_dir, f"fp_{ts}")
+
+        cv2.imwrite(prefix + "_rgb.jpg", rgb)
+        cv2.imwrite(prefix + "_mask.png", mask)
+        np.save(prefix + "_depth.npy", depth.astype(np.float32))
+        depth_norm = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+        cv2.imwrite(prefix + "_depth.png", depth_norm)
+
+        if pose is not None:
+            np.save(prefix + "_pose.npy", pose.astype(np.float32))
+        meta_path = prefix + "_meta.json"
+        with open(meta_path, "w") as f:
+            json.dump(meta, f, indent=2)
+        logger.info("Saved FoundationPose request to %s", base_dir)
+    except Exception as e:
+        logger.warning("Failed to save FoundationPose request: %s", e)
+
+
+def _start_foundationpose_worker(capture: UxPlayCapture, processor: "ArucoProcessor") -> threading.Thread:
+    def loop():
+        while True:
+            frame, ts = capture.get_latest()
+            if frame is None:
+                with foundationpose_lock:
+                    foundationpose_latest.update(
+                        {"pose_matrix": None, "timestamp": None, "message": "No AVP frame yet", "success": False}
+                    )
+                time.sleep(0.2)
+                continue
+
+            if rs_capture is None:
+                with foundationpose_lock:
+                    foundationpose_latest.update(
+                        {"pose_matrix": None, "timestamp": None, "message": "RealSense not connected", "success": False}
+                    )
+                time.sleep(0.5)
+                continue
+
+            latest = rs_capture.get_latest()
+            depth_rs = latest.get("depth")
+            K_rs = latest.get("K")
+            if depth_rs is None or K_rs is None:
+                with foundationpose_lock:
+                    foundationpose_latest.update(
+                        {"pose_matrix": None, "timestamp": ts, "message": "No RealSense depth yet", "success": False}
+                    )
+                time.sleep(0.2)
+                continue
+
+            T_avp_rs = _get_T_avp_rs()
+            if T_avp_rs is None:
+                with foundationpose_lock:
+                    foundationpose_latest.update(
+                        {"pose_matrix": None, "timestamp": ts, "message": "Missing RS->AVP calibration", "success": False}
+                    )
+                time.sleep(0.5)
+                continue
+
+            try:
+                depth_avp = _transform_depth_rs_to_avp(
+                    depth_rs, K_rs, T_avp_rs, processor.K, (capture.height, capture.width)
+                )
+            except Exception as e:
+                with foundationpose_lock:
+                    foundationpose_latest.update(
+                        {"pose_matrix": None, "timestamp": ts, "message": f"Depth transform failed: {e}", "success": False}
+                    )
+                time.sleep(0.5)
+                continue
+
+            with hsv_lock:
+                cfg = HsvFilterConfig(**vars(hsv_cfg))
+            if cfg.enabled:
+                mask = _compute_hsv_mask(frame, cfg)
+            else:
+                mask = np.full(frame.shape[:2], 255, dtype=np.uint8)
+
+            model_name = _get_selected_model()
+            mesh_path = model_name
+            if not os.path.isabs(mesh_path):
+                mesh_path = os.path.join(CONFIG["paths"]["models_dir"], mesh_path)
+            if not os.path.exists(mesh_path):
+                with foundationpose_lock:
+                    foundationpose_latest.update(
+                        {"pose_matrix": None, "timestamp": ts, "message": f"Missing mesh: {model_name}", "success": False}
+                    )
+                time.sleep(1.0)
+                continue
+
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pose = estimate_pose(
+                rgb=rgb,
+                depth=depth_avp,
+                mask=mask,
+                K=processor.K,
+                mesh_path=mesh_path,
+                api_url=CONFIG["network"]["foundationpose_url"],
+            )
+
+            if _consume_save_next_foundationpose():
+                _save_foundationpose_request(
+                    rgb=rgb,
+                    depth=depth_avp,
+                    mask=mask,
+                    pose=pose,
+                    meta={
+                        "timestamp": ts,
+                        "model": model_name,
+                        "foundationpose_url": CONFIG["network"]["foundationpose_url"],
+                    },
+                )
+
+            if pose is None:
+                with foundationpose_lock:
+                    foundationpose_latest.update(
+                        {"pose_matrix": None, "timestamp": ts, "message": "FoundationPose returned no pose", "success": False}
+                    )
+                time.sleep(1.0)
+                continue
+
+            with foundationpose_lock:
+                foundationpose_latest.update(
+                    {
+                        "pose_matrix": pose,
+                        "timestamp": ts,
+                        "message": "ok",
+                        "success": True,
+                    }
+                )
+
+            time.sleep(0.8)
+
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+    return t
+
+
 # -----------------------------
 # Flask API
 # -----------------------------
@@ -885,6 +1059,22 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
                 "hsv_filter": hsv_state,
             }
         ), 200
+
+    @app.route("/foundationpose_save_next", methods=["GET", "POST"])
+    def foundationpose_save_next_route():
+        """
+        Toggle saving the next FoundationPose request inputs/outputs.
+        """
+        global foundationpose_save_next
+        if request.method == "GET":
+            with foundationpose_save_lock:
+                return jsonify({"enabled": foundationpose_save_next}), 200
+
+        data = request.get_json(silent=True) or {}
+        enabled = bool(data.get("enabled", False))
+        with foundationpose_save_lock:
+            foundationpose_save_next = enabled
+        return jsonify({"enabled": foundationpose_save_next}), 200
 
     @app.route("/models", methods=["GET"])
     def models():
@@ -1048,6 +1238,12 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
             rvec, tvec = _T_to_rvec_tvec(T_avp_rs)
             out = _draw_axes(out, rvec, tvec, K_avp, dist, processor.cfg.axis_length_m, label="RS")
 
+        with foundationpose_lock:
+            fp_pose = foundationpose_latest.get("pose_matrix")
+        if fp_pose is not None:
+            rvec, tvec = _T_to_rvec_tvec(fp_pose)
+            out = _draw_axes(out, rvec, tvec, K_avp, dist, processor.cfg.axis_length_m, label="foundationpose")
+
         rgb_b64 = _encode_jpeg_b64(out, quality=85)
         return jsonify(
             {
@@ -1177,6 +1373,22 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
                 "quaternion": quat,
                 "T_avp_rs": T_avp_rs.tolist(),
                 "head_pose_age": age,
+            }
+        ), 200
+
+    @app.route("/get_foundationpose_pose", methods=["GET"])
+    def get_foundationpose_pose():
+        with foundationpose_lock:
+            pose = foundationpose_latest.get("pose_matrix")
+            ts = foundationpose_latest.get("timestamp")
+            msg = foundationpose_latest.get("message")
+            ok = foundationpose_latest.get("success")
+        return jsonify(
+            {
+                "pose_matrix": None if pose is None else pose.tolist(),
+                "timestamp": ts,
+                "success": bool(ok),
+                "message": msg,
             }
         ), 200
 
@@ -1562,6 +1774,11 @@ loadCfg().then(wire);
                     if T_avp_rs is not None:
                         rvec, tvec = _T_to_rvec_tvec(T_avp_rs)
                         out = _draw_axes(out, rvec, tvec, K, dist, processor.cfg.axis_length_m, label="RS")
+                    with foundationpose_lock:
+                        fp_pose = foundationpose_latest.get("pose_matrix")
+                    if fp_pose is not None:
+                        rvec, tvec = _T_to_rvec_tvec(fp_pose)
+                        out = _draw_axes(out, rvec, tvec, K, dist, processor.cfg.axis_length_m, label="foundationpose")
 
                 elif view == "avp_depth":
                     if rs_capture is None:
@@ -1699,6 +1916,7 @@ def main():
         process_fps=args.fps,
     )
     processor.start()
+    _start_foundationpose_worker(capture, processor)
 
     app = create_app(capture, processor)
 

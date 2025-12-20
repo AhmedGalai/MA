@@ -32,6 +32,7 @@
 		AA0000000000000000001017 /* CalibrationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000002023 /* CalibrationManager.swift */; };
 		AA0000000000000000001018 /* RealSensePoseModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000002024 /* RealSensePoseModel.swift */; };
 		AA0000000000000000001019 /* AnchorSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000002025 /* AnchorSetupView.swift */; };
+		AA000000000000000000101A /* FoundationPoseModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000002026 /* FoundationPoseModel.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -62,6 +63,7 @@
 		AA0000000000000000002023 /* CalibrationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibrationManager.swift; sourceTree = "<group>"; };
 		AA0000000000000000002024 /* RealSensePoseModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealSensePoseModel.swift; sourceTree = "<group>"; };
 		AA0000000000000000002025 /* AnchorSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnchorSetupView.swift; sourceTree = "<group>"; };
+		AA0000000000000000002026 /* FoundationPoseModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FoundationPoseModel.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -98,6 +100,7 @@
 				AA0000000000000000002002 /* AppModel.swift */,
 				AA0000000000000000002023 /* CalibrationManager.swift */,
 				AA0000000000000000002024 /* RealSensePoseModel.swift */,
+				AA0000000000000000002026 /* FoundationPoseModel.swift */,
 				AA0000000000000000002003 /* ArrowSettings.swift */,
 				AA0000000000000000002004 /* LogStore.swift */,
 				AA0000000000000000002005 /* ContentView.swift */,
@@ -239,6 +242,7 @@
 				AA0000000000000000001017 /* CalibrationManager.swift in Sources */,
 				AA0000000000000000001018 /* RealSensePoseModel.swift in Sources */,
 				AA0000000000000000001019 /* AnchorSetupView.swift in Sources */,
+				AA000000000000000000101A /* FoundationPoseModel.swift in Sources */,
 				AA0000000000000000001013 /* SensorMonitorView.swift in Sources */,
 				AA0000000000000000001003 /* ArrowSettings.swift in Sources */,
 				AA0000000000000000001012 /* ROIOverlayView.swift in Sources */,
