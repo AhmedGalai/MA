@@ -14,6 +14,7 @@ struct ImmersiveSpaceView: View {
     var body: some View {
         RealityView { content in
             let anchor = AnchorEntity(.head)
+            //let anchor = AnchorEntity(.camera)
             content.add(anchor)
             headAnchor = anchor
 
@@ -25,10 +26,10 @@ struct ImmersiveSpaceView: View {
 
             let headAxesEntity = makeAxesEntity(length: 0.12)
             headAxesEntity.name = "HeadAxes"
+            headAxesEntity.isEnabled = false
             anchor.addChild(headAxesEntity)
             headAxes = headAxesEntity
         } update: { _ in
-            updateHeadAxes()
             updateBoardAxes()
         }
         .task {

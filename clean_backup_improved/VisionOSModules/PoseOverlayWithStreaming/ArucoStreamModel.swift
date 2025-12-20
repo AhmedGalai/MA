@@ -121,8 +121,7 @@ struct ArucoBoardPose {
               boardPose.count == 4,
               boardPose.allSatisfy({ $0.count == 4 }) else { return nil }
         let cvBoardToCam = MatrixUtils.simdMatrix(from: boardPose)
-        // Convert to camera->board in OpenCV coordinates, then to RealityKit.
-        let cvCamToBoard = cvBoardToCam.inverse
-        return MatrixUtils.convertOpenCVToRealityKit(cvCamToBoard)
+        // OpenCV pose is board->camera; RealityKit wants the entity pose in camera space.
+        return MatrixUtils.convertOpenCVToRealityKit(cvBoardToCam)
     }
 }

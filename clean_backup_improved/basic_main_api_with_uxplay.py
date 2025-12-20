@@ -32,6 +32,9 @@ import cv2
 from flask import Flask, jsonify, request, Response
 from flask_cors import CORS
 
+from rich import print, pretty
+pretty.install()
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -55,9 +58,9 @@ head_pose_lock = threading.Lock()
 @dataclass
 class ArucoConfig:
     dictionary_name: str = "DICT_4X4_50"  # common default
-    rows: int = 5                        # markersY
-    cols: int = 7                        # markersX
-    marker_size_m: float = 0.04          # marker side length in meters
+    rows: int = 3                        # markersY
+    cols: int = 4                        # markersX
+    marker_size_m: float = 0.03          # marker side length in meters
     separation_m: float = 0.01           # gap between markers in meters
     draw_axes: bool = True
     axis_length_m: float = 0.06          # axis length in meters (visualization)
@@ -201,21 +204,13 @@ def _make_grid_board(cfg: ArucoConfig, dictionary):
         )
 
 
-def _default_camera_matrix(width: int, height: int) -> np.ndarray:
-    """
-    Very rough placeholder intrinsics.
-    Replace with real intrinsics when available.
-    """
-    w = float(width)
-    h = float(height)
-    fx = 0.9 * w
-    fy = 0.9 * w
-    cx = w / 2.0
-    cy = h / 2.0
-    K = np.array([[fx, 0.0, cx],
-                  [0.0, fy, cy],
-                  [0.0, 0.0, 1.0]], dtype=np.float32)
-    return K
+def _load_intrinsics(path: str):
+    import json, numpy as np
+    with open(path, "r") as f:
+        d = json.load(f)
+    K = np.array(d["K"], dtype=np.float32)
+    dist = np.array(d.get("dist", [0,0,0,0,0]), dtype=np.float32).reshape(-1, 1)
+    return K, dist
 
 
 def _rvec_tvec_to_T(rvec: np.ndarray, tvec: np.ndarray) -> np.ndarray:
@@ -279,8 +274,13 @@ class ArucoProcessor:
         self.dictionary = _get_aruco_dictionary(cfg.dictionary_name)
         self.board = _make_grid_board(cfg, self.dictionary)
 
-        self.K = _default_camera_matrix(capture.width, capture.height)
-        self.dist = np.zeros((5, 1), dtype=np.float32)
+        # in ArucoProcessor.__init__ after width/height known:
+        self.K, self.dist = _load_intrinsics("intrinsics.json")
+        print("Loaded JSON intrinsics:")
+        print("K:\n", self.K)
+        print("dist:\n", self.dist)
+
+
 
         # detection params
         try:
@@ -738,10 +738,10 @@ def main():
     parser.add_argument("--height", type=int, default=1080)
 
     parser.add_argument("--fps", type=float, default=15.0, help="AruCo processing FPS (not capture FPS)")
-    parser.add_argument("--aruco-dict", default="DICT_4X4_50")
-    parser.add_argument("--aruco-rows", type=int, default=5)
-    parser.add_argument("--aruco-cols", type=int, default=7)
-    parser.add_argument("--marker-size-m", type=float, default=0.04)
+    parser.add_argument("--aruco-dict", default="DICT_4X4_250")
+    parser.add_argument("--aruco-rows", type=int, default=3)
+    parser.add_argument("--aruco-cols", type=int, default=4)
+    parser.add_argument("--marker-size-m", type=float, default=0.03)
     parser.add_argument("--separation-m", type=float, default=0.01)
     parser.add_argument("--no-axes", action="store_true")
 
