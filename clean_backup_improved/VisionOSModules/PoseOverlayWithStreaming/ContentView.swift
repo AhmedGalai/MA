@@ -153,7 +153,7 @@ struct ContentView: View {
                 Text("ROI Radius: \(Int(arrowSettings.roiRadius))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Slider(value: $arrowSettings.roiRadius, in: 40...420, step: 2)
+                Slider(value: $arrowSettings.roiRadius, in: 10...420, step: 2)
             }
         }
     }

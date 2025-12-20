@@ -30,6 +30,7 @@ struct PoseOverlayWithStreamingApp: App {
             .environmentObject(appModel)
 
         WindowGroup("ROI Window", id: "roi") { ROIWindowView() }
+            .windowStyle(.plain)
             .environmentObject(arrowSettings)
             .environmentObject(logStore)
 
