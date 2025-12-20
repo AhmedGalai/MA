@@ -54,9 +54,9 @@ final class DebugDashboardModel: ObservableObject {
     @Published var rsArucoFrame = FrameState()
     @Published var avpFrame = FrameState()
     @Published var avpArucoFrame = FrameState()
+    @Published var avpRSOverlayFrame = FrameState()
+    @Published var avpMaskFrame = FrameState()
     @Published var transformedDepthFrame = FrameState()
-    @Published var avpROIFrame = FrameState()
-    @Published var roiMaskFrame = FrameState()
     @Published var intrinsics = IntrinsicsState()
     @Published var transforms = TransformState()
     @Published var poseInAVP = PoseInAVPState()
@@ -65,16 +65,18 @@ final class DebugDashboardModel: ObservableObject {
     @Published var lastUpdate: Date?
     @Published var avpLastFetchTime: Date?
 
-    // ROI and HSV parameters
-    @Published var roiX: Int = 0
-    @Published var roiY: Int = 0
-    @Published var roiWidth: Int = 320
-    @Published var roiHeight: Int = 240
-    @Published var hsvLower: [Int] = [0, 100, 100]
-    @Published var hsvUpper: [Int] = [10, 255, 255]
+    // HSV parameters (mean color + std deviation)
+    @Published var hsvMeanH: Int = 90
+    @Published var hsvMeanS: Int = 255
+    @Published var hsvMeanV: Int = 255
+    @Published var hsvMeanColor: Color = .cyan
+    @Published var hsvStdH: Int = 10
+    @Published var hsvStdS: Int = 40
+    @Published var hsvStdV: Int = 40
 
     private var baseURL: URL?
     private var pollTask: Task<Void, Never>?
+    private var suppressHSVPost = false
 
     func updateBaseURL(_ url: URL?) {
         baseURL = url
@@ -110,31 +112,49 @@ final class DebugDashboardModel: ObservableObject {
     private func fetchOnce() async {
         guard let baseURL else { return }
         do {
-            // Only fetch RealSense data continuously (not AVP)
             async let healthTask = fetchHealth(baseURL: baseURL)
             async let rgbdTask = fetchRGBD(baseURL: baseURL)
             async let rsArucoTask = fetchRSAruco(baseURL: baseURL)
+            async let avpLatestTask = fetchAVPLatest(baseURL: baseURL)
+            async let avpArucoTask = fetchAVPAruco(baseURL: baseURL)
+            async let avpRSOverlayTask = fetchAVPRSOverlay(baseURL: baseURL)
+            async let avpMaskTask = fetchAVPMask(baseURL: baseURL)
+            async let transformedDepthTask = fetchTransformedDepth(baseURL: baseURL)
             async let intrinsicsTask = fetchIntrinsics(baseURL: baseURL)
             async let transformTask = fetchTransforms(baseURL: baseURL)
             async let poseInAVPTask = fetchPoseInAVP(baseURL: baseURL)
+            async let hsvTask = fetchHSVConfig(baseURL: baseURL)
 
-            let (health, rgbd, rsAruco, intrinsics, transforms, poseInAVP) = try await (
+            let (health, rgbd, rsAruco, avp, avpAruco, avpRSOverlay, avpMask, transformedDepth, intrinsics, transforms, poseInAVP, hsvConfig) = try await (
                 healthTask,
                 rgbdTask,
                 rsArucoTask,
+                avpLatestTask,
+                avpArucoTask,
+                avpRSOverlayTask,
+                avpMaskTask,
+                transformedDepthTask,
                 intrinsicsTask,
                 transformTask,
-                poseInAVPTask
+                poseInAVPTask,
+                hsvTask
             )
 
             self.health = health
             self.rgbFrame = rgbd.rgb
             self.depthFrame = rgbd.depth
             self.rsArucoFrame = rsAruco
+            self.avpFrame = avp
+            self.avpArucoFrame = avpAruco
+            self.avpRSOverlayFrame = avpRSOverlay
+            self.avpMaskFrame = avpMask
+            self.transformedDepthFrame = transformedDepth
             self.intrinsics = intrinsics
             self.transforms = transforms
             self.poseInAVP = poseInAVP
+            applyHSVConfig(hsvConfig)
             self.lastError = nil
+            self.avpLastFetchTime = Date()
         } catch {
             lastError = error.localizedDescription
         }
@@ -144,26 +164,28 @@ final class DebugDashboardModel: ObservableObject {
     private func fetchAVPData() async {
         guard let baseURL else { return }
         do {
-            // Fetch AVP frames manually (button-triggered)
             async let avpLatestTask = fetchAVPLatest(baseURL: baseURL)
             async let avpArucoTask = fetchAVPAruco(baseURL: baseURL)
             async let transformedDepthTask = fetchTransformedDepth(baseURL: baseURL)
-            async let avpROITask = fetchAVPROI(baseURL: baseURL)
-            async let roiMaskTask = fetchROIMask(baseURL: baseURL)
+            async let avpRSOverlayTask = fetchAVPRSOverlay(baseURL: baseURL)
+            async let avpMaskTask = fetchAVPMask(baseURL: baseURL)
+            async let hsvTask = fetchHSVConfig(baseURL: baseURL)
 
-            let (avp, avpAruco, transformedDepth, avpROI, roiMask) = try await (
+            let (avp, avpAruco, transformedDepth, avpRSOverlay, avpMask, hsvConfig) = try await (
                 avpLatestTask,
                 avpArucoTask,
                 transformedDepthTask,
-                avpROITask,
-                roiMaskTask
+                avpRSOverlayTask,
+                avpMaskTask,
+                hsvTask
             )
 
             self.avpFrame = avp
             self.avpArucoFrame = avpAruco
             self.transformedDepthFrame = transformedDepth
-            self.avpROIFrame = avpROI
-            self.roiMaskFrame = roiMask
+            self.avpRSOverlayFrame = avpRSOverlay
+            self.avpMaskFrame = avpMask
+            applyHSVConfig(hsvConfig)
             var t = self.transforms
             t.avpBoard = avpAruco.poseMatrix
             self.transforms = t
@@ -211,6 +233,15 @@ private extension DebugDashboardModel {
         let calibrated: Bool?
         let message: String?
     }
+    struct HSVConfigResponse: Decodable {
+        let mean_h: Int
+        let mean_s: Int
+        let mean_v: Int
+        let std_h: Int
+        let std_s: Int
+        let std_v: Int
+        let enabled: Bool
+    }
     struct ErrorResponse: Decodable { let error: String }
 
     func fetchHealth(baseURL: URL) async throws -> HealthState {
@@ -245,9 +276,8 @@ private extension DebugDashboardModel {
         let ts = response.timestamp.map { Date(timeIntervalSince1970: $0) }
         let markers = response.markers_detected ?? 0
         let ids = (response.marker_ids ?? []).map(String.init).joined(separator: ", ")
-        let kInfo = response.K != nil ? "K available" : "K pending"
-        let subtitle = "Markers \(markers) \(ids.isEmpty ? "" : "(\(ids))")"
-        let details = "Samples: \(response.samples_collected ?? 0) • \(kInfo)"
+        let subtitle = "RS ArUco • \(markers) markers"
+        let details = ids.isEmpty ? "No IDs" : ids
         return FrameState(image: decodeImage(from: response.rgb),
                           subtitle: subtitle,
                           details: details,
@@ -285,6 +315,28 @@ private extension DebugDashboardModel {
                           details: details,
                           timestamp: ts,
                           poseMatrix: response.pose_matrix)
+    }
+
+    func fetchAVPRSOverlay(baseURL: URL) async throws -> FrameState {
+        let data = try await performRequest(baseURL: baseURL, path: "get_avp_rs_overlay")
+        let response = try JSONDecoder().decode(AVPFrameResponse.self, from: data)
+        let ts = response.timestamp.map { Date(timeIntervalSince1970: $0) }
+        let subtitle = "AVP + RS Overlay"
+        return FrameState(image: decodeImage(from: response.rgb),
+                          subtitle: subtitle,
+                          details: "",
+                          timestamp: ts)
+    }
+
+    func fetchAVPMask(baseURL: URL) async throws -> FrameState {
+        let data = try await performRequest(baseURL: baseURL, path: "get_avp_mask_frame")
+        let response = try JSONDecoder().decode(AVPFrameResponse.self, from: data)
+        let ts = response.timestamp.map { Date(timeIntervalSince1970: $0) }
+        let subtitle = "AVP Mask"
+        return FrameState(image: decodeImage(from: response.rgb),
+                          subtitle: subtitle,
+                          details: "",
+                          timestamp: ts)
     }
 
     func fetchIntrinsics(baseURL: URL) async throws -> IntrinsicsState {
@@ -329,68 +381,9 @@ private extension DebugDashboardModel {
                           timestamp: ts)
     }
 
-    func fetchAVPROI(baseURL: URL) async throws -> FrameState {
-        var comps = URLComponents(url: baseURL.appendingPathComponent("get_roi_rgb"), resolvingAgainstBaseURL: false)!
-        comps.queryItems = [
-            URLQueryItem(name: "x", value: String(roiX)),
-            URLQueryItem(name: "y", value: String(roiY)),
-            URLQueryItem(name: "width", value: String(roiWidth)),
-            URLQueryItem(name: "height", value: String(roiHeight)),
-            URLQueryItem(name: "purpose", value: "roi_selection")
-        ]
-        let data = try await performRequest(url: comps.url!)
-        struct Response: Decodable {
-            let roi_rgb: String
-            let roi_x: Int
-            let roi_y: Int
-            let roi_width: Int
-            let roi_height: Int
-            let timestamp: Double
-        }
-        let response = try JSONDecoder().decode(Response.self, from: data)
-        let ts = Date(timeIntervalSince1970: response.timestamp)
-        let subtitle = "AVP ROI"
-        let details = "[\(response.roi_x),\(response.roi_y)] \(response.roi_width)×\(response.roi_height)"
-        return FrameState(image: decodeImage(from: response.roi_rgb),
-                          subtitle: subtitle,
-                          details: details,
-                          timestamp: ts)
-    }
-
-    func fetchROIMask(baseURL: URL) async throws -> FrameState {
-        let url = baseURL.appendingPathComponent("get_roi_binary_mask")
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let payload: [String: Any] = [
-            "x": roiX,
-            "y": roiY,
-            "width": roiWidth,
-            "height": roiHeight,
-            "hsv_lower": hsvLower,
-            "hsv_upper": hsvUpper,
-            "purpose": "roi_selection"
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw DashboardError.badHTTPStatus((response as? HTTPURLResponse)?.statusCode ?? 0, "Request failed")
-        }
-        struct Response: Decodable {
-            let binary_mask: String
-            let mask_pixels: Int
-            let total_pixels: Int
-            let coverage: Double
-            let timestamp: Double
-        }
-        let decoded = try JSONDecoder().decode(Response.self, from: data)
-        let ts = Date(timeIntervalSince1970: decoded.timestamp)
-        let subtitle = "ROI Binary Mask"
-        let details = String(format: "Coverage: %.1f%% (%d/%d)", decoded.coverage, decoded.mask_pixels, decoded.total_pixels)
-        return FrameState(image: decodeImage(from: decoded.binary_mask),
-                          subtitle: subtitle,
-                          details: details,
-                          timestamp: ts)
+    func fetchHSVConfig(baseURL: URL) async throws -> HSVConfigResponse {
+        let data = try await performRequest(baseURL: baseURL, path: "hsv_config")
+        return try JSONDecoder().decode(HSVConfigResponse.self, from: data)
     }
 
     func performRequest(baseURL: URL, path: String) async throws -> Data {
@@ -423,6 +416,72 @@ private extension DebugDashboardModel {
         guard let data = Data(base64Encoded: base64Part, options: .ignoreUnknownCharacters) else { return nil }
         return UIImage(data: data)
     }
+
+    func applyHSVConfig(_ config: HSVConfigResponse) {
+        suppressHSVPost = true
+        hsvMeanH = config.mean_h
+        hsvMeanS = config.mean_s
+        hsvMeanV = config.mean_v
+        hsvStdH = config.std_h
+        hsvStdS = config.std_s
+        hsvStdV = config.std_v
+        hsvMeanColor = colorFromOpenCVHSV(h: config.mean_h, s: config.mean_s, v: config.mean_v)
+        DispatchQueue.main.async { [weak self] in
+            self?.suppressHSVPost = false
+        }
+    }
+
+    func postHSVConfig(meanH: Int, meanS: Int, meanV: Int, stdH: Int, stdS: Int, stdV: Int) {
+        guard let baseURL else { return }
+        var request = URLRequest(url: baseURL.appendingPathComponent("hsv_config"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let payload: [String: Any] = [
+            "mean_h": meanH,
+            "mean_s": meanS,
+            "mean_v": meanV,
+            "std_h": stdH,
+            "std_s": stdS,
+            "std_v": stdV
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+        Task {
+            _ = try? await URLSession.shared.data(for: request)
+        }
+    }
+
+    func updateHSVFromColor(_ color: Color) {
+        guard !suppressHSVPost else { return }
+        guard let (h, s, v) = openCVHSV(from: color) else { return }
+        hsvMeanH = h
+        hsvMeanS = s
+        hsvMeanV = v
+        postHSVConfig(meanH: h, meanS: s, meanV: v, stdH: hsvStdH, stdS: hsvStdS, stdV: hsvStdV)
+    }
+
+    func updateHSVStd() {
+        guard !suppressHSVPost else { return }
+        postHSVConfig(meanH: hsvMeanH, meanS: hsvMeanS, meanV: hsvMeanV, stdH: hsvStdH, stdS: hsvStdS, stdV: hsvStdV)
+    }
+
+    func openCVHSV(from color: Color) -> (Int, Int, Int)? {
+        let uiColor = UIColor(color)
+        var h: CGFloat = 0
+        var s: CGFloat = 0
+        var v: CGFloat = 0
+        var a: CGFloat = 0
+        guard uiColor.getHue(&h, saturation: &s, brightness: &v, alpha: &a) else { return nil }
+        return (Int(round(h * 179.0)),
+                Int(round(s * 255.0)),
+                Int(round(v * 255.0)))
+    }
+
+    func colorFromOpenCVHSV(h: Int, s: Int, v: Int) -> Color {
+        let hue = Double(max(0, min(179, h))) / 179.0
+        let sat = Double(max(0, min(255, s))) / 255.0
+        let val = Double(max(0, min(255, v))) / 255.0
+        return Color(hue: hue, saturation: sat, brightness: val)
+    }
 }
 
 // MARK: - View
@@ -439,7 +498,6 @@ struct DebugDashboardView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     connectionStatus
                     matricesSection
-                    roiControlsSection
                     hsvControlsSection
                     framesSection
                     logsSection
@@ -524,119 +582,56 @@ struct DebugDashboardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
-    private var roiControlsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("ROI Parameters")
-                .font(.headline)
-            HStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("X: \(model.roiX)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Slider(value: Binding(
-                        get: { Double(model.roiX) },
-                        set: { model.roiX = Int($0) }
-                    ), in: 0...1920, step: 10)
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Y: \(model.roiY)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Slider(value: Binding(
-                        get: { Double(model.roiY) },
-                        set: { model.roiY = Int($0) }
-                    ), in: 0...1080, step: 10)
-                }
-            }
-            HStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Width: \(model.roiWidth)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Slider(value: Binding(
-                        get: { Double(model.roiWidth) },
-                        set: { model.roiWidth = Int($0) }
-                    ), in: 50...1920, step: 10)
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Height: \(model.roiHeight)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Slider(value: Binding(
-                        get: { Double(model.roiHeight) },
-                        set: { model.roiHeight = Int($0) }
-                    ), in: 50...1080, step: 10)
-                }
-            }
-        }
-        .padding()
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-    }
-
     private var hsvControlsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("HSV Filter Parameters")
                 .font(.headline)
             VStack(spacing: 8) {
                 HStack(spacing: 16) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("H min: \(model.hsvLower[0])")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Slider(value: Binding(
-                            get: { Double(model.hsvLower[0]) },
-                            set: { model.hsvLower[0] = Int($0) }
-                        ), in: 0...180, step: 1)
-                    }
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("H max: \(model.hsvUpper[0])")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Slider(value: Binding(
-                            get: { Double(model.hsvUpper[0]) },
-                            set: { model.hsvUpper[0] = Int($0) }
-                        ), in: 0...180, step: 1)
-                    }
+                    ColorPicker("Mean color", selection: $model.hsvMeanColor, supportsOpacity: false)
+                        .onChange(of: model.hsvMeanColor) { _, newValue in
+                            model.updateHSVFromColor(newValue)
+                        }
+                    Text("mean HSV: \(model.hsvMeanH), \(model.hsvMeanS), \(model.hsvMeanV)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 HStack(spacing: 16) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("S min: \(model.hsvLower[1])")
+                        Text("Std H: \(model.hsvStdH)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Slider(value: Binding(
-                            get: { Double(model.hsvLower[1]) },
-                            set: { model.hsvLower[1] = Int($0) }
-                        ), in: 0...255, step: 1)
+                            get: { Double(model.hsvStdH) },
+                            set: { model.hsvStdH = Int($0) }
+                        ), in: 0...90, step: 1)
+                    }
+                    .onChange(of: model.hsvStdH) { _, _ in
+                        model.updateHSVStd()
                     }
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("S max: \(model.hsvUpper[1])")
+                        Text("Std S: \(model.hsvStdS)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Slider(value: Binding(
-                            get: { Double(model.hsvUpper[1]) },
-                            set: { model.hsvUpper[1] = Int($0) }
-                        ), in: 0...255, step: 1)
+                            get: { Double(model.hsvStdS) },
+                            set: { model.hsvStdS = Int($0) }
+                        ), in: 0...127, step: 1)
                     }
-                }
-                HStack(spacing: 16) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("V min: \(model.hsvLower[2])")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Slider(value: Binding(
-                            get: { Double(model.hsvLower[2]) },
-                            set: { model.hsvLower[2] = Int($0) }
-                        ), in: 0...255, step: 1)
+                    .onChange(of: model.hsvStdS) { _, _ in
+                        model.updateHSVStd()
                     }
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("V max: \(model.hsvUpper[2])")
+                        Text("Std V: \(model.hsvStdV)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Slider(value: Binding(
-                            get: { Double(model.hsvUpper[2]) },
-                            set: { model.hsvUpper[2] = Int($0) }
-                        ), in: 0...255, step: 1)
+                            get: { Double(model.hsvStdV) },
+                            set: { model.hsvStdV = Int($0) }
+                        ), in: 0...127, step: 1)
+                    }
+                    .onChange(of: model.hsvStdV) { _, _ in
+                        model.updateHSVStd()
                     }
                 }
             }
@@ -668,10 +663,11 @@ struct DebugDashboardView: View {
                 FrameCard(title: "RS RGB", state: model.rgbFrame)
                 FrameCard(title: "RS Depth", state: model.depthFrame)
                 FrameCard(title: "RS ArUco", state: model.rsArucoFrame)
+                FrameCard(title: "AVP Raw", state: model.avpFrame)
+                FrameCard(title: "AVP ArUco", state: model.avpArucoFrame)
+                FrameCard(title: "AVP Mask", state: model.avpMaskFrame)
+                FrameCard(title: "AVP + RS", state: model.avpRSOverlayFrame)
                 FrameCard(title: "Transformed Depth", state: model.transformedDepthFrame)
-                FrameCard(title: "AVP Aruco", state: model.avpArucoFrame)
-                FrameCard(title: "AVP ROI", state: model.avpROIFrame)
-                FrameCard(title: "ROI Mask", state: model.roiMaskFrame)
             }
         }
         .padding()

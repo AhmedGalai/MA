@@ -2,6 +2,9 @@ import SwiftUI
 import ARKit
 import AVFoundation
 import Combine
+import CoreImage
+import CoreVideo
+import QuartzCore
 
 @MainActor
 class SensorManager: ObservableObject {

@@ -3,9 +3,12 @@ import SwiftUI
 struct ContentView: View {
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
+    @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var appModel: AppModel
     @EnvironmentObject private var sensorModel: SensorDataModel
     @EnvironmentObject private var arucoStream: ArucoStreamModel
+    @EnvironmentObject private var rsPoseModel: RealSensePoseModel
+    @EnvironmentObject private var logs: LogStore
 
     @AppStorage("poseoverlay.apiHost") private var storedHost = "127.0.0.1"
     @AppStorage("poseoverlay.apiPort") private var storedPort = "8000"
@@ -15,13 +18,6 @@ struct ContentView: View {
     @State private var statusText = "Not connected"
     @State private var isOpeningImmersive = false
 
-    private let timestampFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.timeStyle = .medium
-        f.dateStyle = .none
-        return f
-    }()
-
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Aruco Monitor")
@@ -29,8 +25,9 @@ struct ContentView: View {
                 .bold()
 
             connectionControls
-            feedView
+            modelSection
             statusSection
+            windowsSection
             Spacer(minLength: 0)
         }
         .padding()
@@ -80,51 +77,6 @@ struct ContentView: View {
         }
     }
 
-    private var feedView: some View {
-        ZStack(alignment: .bottomLeading) {
-            if let image = arucoStream.annotatedImage {
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .stroke(Color.primary.opacity(0.1), lineWidth: 1)
-                    )
-            } else {
-                VStack(spacing: 12) {
-                    ProgressView()
-                    Text("Waiting for RGB feed…")
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, minHeight: 280)
-                .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(feedStatusLine)
-                    .font(.footnote)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(.ultraThinMaterial)
-                    .clipShape(Capsule())
-                if let ts = arucoStream.lastTimestamp {
-                    Text("Updated \(timestampFormatter.string(from: ts))")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(.ultraThinMaterial)
-                        .clipShape(Capsule())
-                }
-            }
-            .padding(12)
-        }
-        .frame(maxHeight: 420)
-    }
-
     private var statusSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(statusText)
@@ -147,6 +99,49 @@ struct ContentView: View {
         }
     }
 
+    private var modelSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("3D Model")
+                .font(.headline)
+            HStack(spacing: 12) {
+                Menu {
+                    ForEach(appModel.availableModels, id: \.self) { name in
+                        Button(name) { handleModelSelection(name) }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(modelMenuLabel)
+                            .foregroundStyle(appModel.availableModels.isEmpty ? .secondary : .primary)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .disabled(appModel.isLoadingModels || appModel.availableModels.isEmpty)
+
+                Button("Reload") { Task { await loadModels() } }
+                    .disabled(appModel.isLoadingModels)
+            }
+            if let err = appModel.lastModelError {
+                Text(err)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    private var windowsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Windows")
+                .font(.headline)
+            HStack(spacing: 12) {
+                Button("Anchor Setup") { openWindow(id: "anchor") }
+                Button("ROI Window") { openWindow(id: "roi") }
+                Button("Debug Viewer") { openWindow(id: "debug") }
+            }
+        }
+    }
+
     // MARK: - Actions
     private func initializeConnection() async {
         hostField = storedHost
@@ -155,6 +150,7 @@ struct ContentView: View {
         await MainActor.run {
             sensorModel.start()
         }
+        await loadModelsIfNeeded()
     }
 
     private func applyConnection() async {
@@ -177,6 +173,9 @@ struct ContentView: View {
         }
 
         sensorModel.setAPIBaseURL(base)
+        rsPoseModel.updateBaseURL(base)
+        rsPoseModel.startPolling()
+        logs.add("API base set to \(urlString)")
         await MainActor.run {
             arucoStream.startStreaming(baseURL: base)
             statusText = "Connected"
@@ -203,13 +202,6 @@ struct ContentView: View {
         }
     }
 
-    private var feedStatusLine: String {
-        if let pose = arucoStream.latestPose, pose.isDetected {
-            return "ArUco detected (\(pose.numMarkers) markers)"
-        }
-        return "No detection yet"
-    }
-
     private func sanitizeHost(_ raw: String) -> String {
         var host = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if host.hasPrefix("http://") {
@@ -227,5 +219,61 @@ struct ContentView: View {
             return "\(value)"
         }
         return "8000"
+    }
+
+    private var modelMenuLabel: String {
+        if appModel.isLoadingModels { return "Loading…" }
+        if let selection = appModel.selectedModel, !selection.isEmpty { return selection }
+        if appModel.availableModels.isEmpty { return "No models" }
+        return "Select model"
+    }
+
+    private func handleModelSelection(_ name: String) {
+        appModel.setSelectedModel(name)
+        Task { await postSelectionIfNeeded() }
+    }
+
+    private func loadModelsIfNeeded() async {
+        guard appModel.availableModels.isEmpty else { return }
+        await loadModels()
+    }
+
+    private func loadModels() async {
+        guard let base = appModel.baseURL else {
+            appModel.lastModelError = "Set a valid API URL first"
+            return
+        }
+        await MainActor.run {
+            appModel.isLoadingModels = true
+            appModel.lastModelError = nil
+        }
+        do {
+            let list = try await ModelService.fetchModelList(baseURL: base)
+            await MainActor.run {
+                appModel.setAvailableModels(list)
+                appModel.isLoadingModels = false
+                if appModel.selectedModel == nil, let first = list.first {
+                    appModel.setSelectedModel(first)
+                }
+            }
+            if let selected = appModel.selectedModel {
+                try? await ModelService.selectModel(baseURL: base, name: selected)
+            }
+        } catch {
+            await MainActor.run {
+                appModel.isLoadingModels = false
+                appModel.lastModelError = error.localizedDescription
+            }
+        }
+    }
+
+    private func postSelectionIfNeeded() async {
+        guard let name = appModel.selectedModel,
+              let base = appModel.baseURL else { return }
+        do {
+            try await ModelService.selectModel(baseURL: base, name: name)
+        } catch {
+            await MainActor.run { appModel.lastModelError = error.localizedDescription }
+        }
     }
 }

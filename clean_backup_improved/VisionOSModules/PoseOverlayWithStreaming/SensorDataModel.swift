@@ -96,7 +96,7 @@ final class SensorDataModel: ObservableObject {
 
             NSLog("📱 [SensorDataModel] ✓ ARKit authorized")
 
-            // Run ARKit session with world tracking
+            // Run ARKit session with world tracking.
             try await arkitSession.run([worldTracking])
             NSLog("📱 [SensorDataModel] ✓ ARKitSession running")
 

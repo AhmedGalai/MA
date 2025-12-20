@@ -124,7 +124,7 @@ struct ROIOverlayView: View {
 
             ZStack {
                 Color.clear // drawing surface
-                ring(center: center, radius: roiRadius, color: color)
+                disk(center: center, radius: roiRadius, color: color)
                     .allowsHitTesting(false)
             }
             .contentShape(Rectangle()) // still no gestures here
@@ -133,14 +133,11 @@ struct ROIOverlayView: View {
 
     // Visuals
     @ViewBuilder
-    private func ring(center: CGPoint, radius: CGFloat, color: Color) -> some View {
-        let w: CGFloat = 2
-        ZStack {
-            Circle().stroke(color.opacity(0.95), lineWidth: w)
-            Circle().stroke(color.opacity(0.55), lineWidth: w).blur(radius: 8)
-            Circle().stroke(color.opacity(0.35), lineWidth: w).blur(radius: 16)
-        }
-        .frame(width: radius * 2, height: radius * 2)
-        .position(center)
+    private func disk(center: CGPoint, radius: CGFloat, color: Color) -> some View {
+        Circle()
+            .fill(color.opacity(0.18))
+            .overlay(Circle().stroke(color.opacity(0.8), lineWidth: 1))
+            .frame(width: radius * 2, height: radius * 2)
+            .position(center)
     }
 }

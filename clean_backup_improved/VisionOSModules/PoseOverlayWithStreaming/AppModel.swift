@@ -27,6 +27,10 @@ final class AppModel: ObservableObject {
     /// Useful for coordinating immersive-space buttons across windows.
     @Published var immersiveSpacePresented = false
 
+    /// Anchor parameters driven by UI sliders.
+    @Published var anchorTranslation: SIMD3<Double> = SIMD3<Double>(0, 1.2, -0.6)
+    @Published var anchorEulerDegrees: SIMD3<Double> = .zero
+
     init(defaultBaseURL: String = "http://127.0.0.1:8000") {
         self.baseURLString = defaultBaseURL
         self.baseURL = AppModel.normalizeURL(from: defaultBaseURL)

@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct LogsView: View {
     @EnvironmentObject private var logs: LogStore

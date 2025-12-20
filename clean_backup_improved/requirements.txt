@@ -6,13 +6,14 @@ numpy>=1.24.0
 opencv-python>=4.8.0
 scipy>=1.10.0
 
-# RealSense Hardware Interface
-pyrealsense2>=2.54.0
+# RealSense Hardware Interface (no macOS wheels available)
+pyrealsense2>=2.54.0; platform_system != "Darwin"
 
 # Flask REST API
 flask>=2.3.0
 flask-cors>=4.0.0
 requests>=2.31.0
+rich>=13.5.0
 
 # Optional: For debugging GUI
 # Pillow>=10.0.0

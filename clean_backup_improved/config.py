@@ -56,18 +56,10 @@ CONFIG = {
     "paths": {
         "models": os.path.join(
             os.path.dirname(__file__),
-            "..",
-            "Abgabe",
-            "src",
-            "Kubuntu",
             "models"
         ),
         "models_dir": os.path.join(
             os.path.dirname(__file__),
-            "..",
-            "Abgabe",
-            "src",
-            "Kubuntu",
             "models"
         ),
         "extrinsics_dir": os.path.join(os.path.dirname(__file__), "extrinsics"),

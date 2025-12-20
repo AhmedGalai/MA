@@ -1,23 +1,24 @@
 import SwiftUI
 import RealityKit
 import simd
+import UIKit
 
 struct ImmersiveSpaceView: View {
     @EnvironmentObject private var appModel: AppModel
     @EnvironmentObject private var sensorModel: SensorDataModel
     @EnvironmentObject private var arucoStream: ArucoStreamModel
     @EnvironmentObject private var calibrationManager: CalibrationManager
+    @EnvironmentObject private var rsPoseModel: RealSensePoseModel
 
     @State private var boardAxes: Entity?
     @State private var worldAnchor: AnchorEntity?
-
-    @State private var userTranslation: SIMD3<Float> = .zero
-    @State private var userRotation: simd_quatf = simd_quatf(angle: 0, axis: [0, 1, 0])
+    @State private var anchorGizmo: Entity?
+    @State private var rsAxes: Entity?
 
     var body: some View {
         ZStack(alignment: .bottom) {
             RealityView { content in
-                let anchor = AnchorEntity(.world)
+                let anchor = AnchorEntity(.world(transform: matrix_identity_float4x4))
                 content.add(anchor)
                 worldAnchor = anchor
 
@@ -26,30 +27,36 @@ struct ImmersiveSpaceView: View {
                 boardAxesEntity.isEnabled = false
                 anchor.addChild(boardAxesEntity)
                 boardAxes = boardAxesEntity
+
+                let gizmo = makeAnchorGizmo()
+                gizmo.name = "AnchorGizmo"
+                anchor.addChild(gizmo)
+                anchorGizmo = gizmo
+
+                let rsAxesEntity = makeRSEntity()
+                rsAxesEntity.name = "RealSenseAxes"
+                rsAxesEntity.isEnabled = false
+                anchor.addChild(rsAxesEntity)
+                rsAxes = rsAxesEntity
             } update: { _ in
-                updateHeadPose()
                 updateBoardAxes()
+                updateWorldAnchorFromSliders()
+                updateRSPose()
             }
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        let translation = value.translation
-                        userTranslation.x += Float(translation.width) * 0.001
-                        userTranslation.y -= Float(translation.height) * 0.001
-                    }
-            )
 
             HStack {
                 Button("Calibrate") {
-                    let calibrationMatrix = simd_float4x4(translation: userTranslation) * simd_float4x4(userRotation)
+                    let translation = sliderTranslation
+                    let rotation = sliderRotation
+                    let calibrationMatrix = simd_float4x4(translation: translation) * simd_float4x4(rotation)
                     calibrationManager.saveCalibration(transform: calibrationMatrix)
                 }
                 .padding()
 
                 Button("Clear Calibration") {
                     calibrationManager.clearCalibration()
-                    userTranslation = .zero
-                    userRotation = simd_quatf(angle: 0, axis: [0, 1, 0])
+                    appModel.anchorTranslation = .zero
+                    appModel.anchorEulerDegrees = .zero
                 }
                 .padding()
             }
@@ -63,25 +70,50 @@ struct ImmersiveSpaceView: View {
         }
     }
     
-    private func updateHeadPose() {
-        guard let worldAnchor else { return }
-        let headPose = Transform(
-            scale: .one,
-            rotation: sensorModel.headOrientation,
-            translation: sensorModel.headPosition
-        )
-        worldAnchor.transform = headPose.inverse
-    }
-
     private func updateBoardAxes() {
         guard let boardAxes else { return }
         if let matrix = arucoStream.calibratedBoardTransform {
             boardAxes.isEnabled = true
-            let userTransform = Transform(scale: .one, rotation: userRotation, translation: userTranslation)
-            boardAxes.transform = Transform(matrix: matrix) * userTransform
+            let userTransform = Transform(scale: .one, rotation: sliderRotation, translation: sliderTranslation)
+            let combined = Transform(matrix: matrix * userTransform.matrix)
+            boardAxes.transform = combined
         } else {
             boardAxes.isEnabled = false
         }
+    }
+
+    private func updateWorldAnchorFromSliders() {
+        guard let worldAnchor else { return }
+        worldAnchor.transform = Transform(scale: .one,
+                                          rotation: sliderRotation,
+                                          translation: sliderTranslation)
+    }
+
+    private func updateRSPose() {
+        guard let rsAxes else { return }
+        if let matrix = rsPoseModel.rsPoseMatrix {
+            rsAxes.isEnabled = true
+            rsAxes.transform = Transform(matrix: matrix)
+        } else {
+            rsAxes.isEnabled = false
+        }
+    }
+
+    private var sliderTranslation: SIMD3<Float> {
+        SIMD3<Float>(
+            Float(appModel.anchorTranslation.x),
+            Float(appModel.anchorTranslation.y),
+            Float(appModel.anchorTranslation.z)
+        )
+    }
+
+    private var sliderRotation: simd_quatf {
+        let degrees = appModel.anchorEulerDegrees
+        let radians = SIMD3<Double>(degrees.x, degrees.y, degrees.z) * (.pi / 180.0)
+        let pitch = simd_quatf(angle: Float(radians.x), axis: [1, 0, 0])
+        let yaw = simd_quatf(angle: Float(radians.y), axis: [0, 1, 0])
+        let roll = simd_quatf(angle: Float(radians.z), axis: [0, 0, 1])
+        return yaw * pitch * roll
     }
 
     private func makeAxesEntity(length: Float) -> Entity {
@@ -111,6 +143,24 @@ struct ImmersiveSpaceView: View {
         return entity
     }
 
+    private func makeAnchorGizmo() -> Entity {
+        let root = Entity()
+        let axes = makeAxesEntity(length: 0.22)
+        root.addChild(axes)
+
+        let sphere = ModelEntity(
+            mesh: .generateSphere(radius: 0.02),
+            materials: [SimpleMaterial(color: .yellow, roughness: 0.4, isMetallic: false)]
+        )
+        root.addChild(sphere)
+
+        let label = makeTextLabel(text: "aruco")
+        label.position = [0, 0.06, 0]
+        root.addChild(label)
+
+        return root
+    }
+
     private func makeBoardAxesEntity() -> Entity {
         let root = Entity()
         let scale: Float = 0.6
@@ -129,7 +179,48 @@ struct ImmersiveSpaceView: View {
         root.addChild(xArrow)
         root.addChild(yArrow)
         root.addChild(zArrow)
+        let label = makeTextLabel(text: "aruco")
+        label.position = [0, 0.14, 0]
+        root.addChild(label)
         return root
+    }
+
+    private func makeRSEntity() -> Entity {
+        let root = Entity()
+        let scale: Float = 0.45
+
+        let xArrow = ArrowFactory.makeArrow(color: .red)
+        xArrow.transform.rotation = simd_quatf(angle: .pi / 2, axis: [0, 1, 0])
+        xArrow.scale = SIMD3<Float>(repeating: scale)
+
+        let yArrow = ArrowFactory.makeArrow(color: .green)
+        yArrow.transform.rotation = simd_quatf(angle: -.pi / 2, axis: [1, 0, 0])
+        yArrow.scale = SIMD3<Float>(repeating: scale)
+
+        let zArrow = ArrowFactory.makeArrow(color: .blue)
+        zArrow.scale = SIMD3<Float>(repeating: scale)
+
+        root.addChild(xArrow)
+        root.addChild(yArrow)
+        root.addChild(zArrow)
+
+        let label = makeTextLabel(text: "Realsense")
+        label.position = [0, 0.12, 0]
+        root.addChild(label)
+        return root
+    }
+
+    private func makeTextLabel(text: String) -> ModelEntity {
+        let mesh = MeshResource.generateText(
+            text,
+            extrusionDepth: 0.002,
+            font: .systemFont(ofSize: 0.08),
+            containerFrame: .zero,
+            alignment: .center,
+            lineBreakMode: .byWordWrapping
+        )
+        let material = SimpleMaterial(color: .white, roughness: 0.4, isMetallic: false)
+        return ModelEntity(mesh: mesh, materials: [material])
     }
 }
 
