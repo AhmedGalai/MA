@@ -10,14 +10,17 @@ Single-process Flask API that:
   - RGB feed endpoint (base64 JPEG)
   - Pose endpoint (base64 JPEG + ArUco board pose as 4x4 matrix + rvec/tvec + ids)
 
+Debug additions:
+- /mjpeg?view=raw|overlay|mask
+- /debug HTML page showing 3 MJPEG views + HSV controls
+- /hsv_config GET/POST to control HSV mean/stddev threshold mask
+
 Notes:
 - UxPlay raw video output requires you to know width/height ahead of time.
-- Pose estimation needs camera intrinsics K. This file uses a simple default K
-  (good enough to get started; replace with real intrinsics when you have them).
+- Pose estimation needs camera intrinsics K/dist from intrinsics.json
 """
 
 import os
-import sys
 import time
 import signal
 import base64
@@ -41,7 +44,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("basic_main_api_with_uxplay")
 
+# -----------------------------
 # Head pose storage (from visionOS)
+# -----------------------------
 head_pose_latest = None
 head_pose_meta = {
     "receive_time": None,
@@ -57,13 +62,31 @@ head_pose_lock = threading.Lock()
 # -----------------------------
 @dataclass
 class ArucoConfig:
-    dictionary_name: str = "DICT_4X4_50"  # common default
-    rows: int = 3                        # markersY
-    cols: int = 4                        # markersX
-    marker_size_m: float = 0.03          # marker side length in meters
-    separation_m: float = 0.01           # gap between markers in meters
+    dictionary_name: str = "DICT_4X4_50"
+    rows: int = 3
+    cols: int = 4
+    marker_size_m: float = 0.03
+    separation_m: float = 0.01
     draw_axes: bool = True
-    axis_length_m: float = 0.06          # axis length in meters (visualization)
+    axis_length_m: float = 0.06
+
+
+# -----------------------------
+# HSV filter config (debug mask)
+# -----------------------------
+@dataclass
+class HsvFilterConfig:
+    mean_h: int = 20   # OpenCV H: 0..179
+    mean_s: int = 120  # 0..255
+    mean_v: int = 120  # 0..255
+    std_h: int = 10
+    std_s: int = 40
+    std_v: int = 40
+    enabled: bool = True
+
+
+hsv_cfg = HsvFilterConfig()
+hsv_lock = threading.Lock()
 
 
 # -----------------------------
@@ -72,17 +95,10 @@ class ArucoConfig:
 class UxPlayCapture:
     """
     Spawns UxPlay and reads raw BGR frames from stdout.
-
     Important: You MUST supply width/height correctly.
     """
 
-    def __init__(
-        self,
-        uxplay_binary: str,
-        device_name: str,
-        width: int,
-        height: int,
-    ):
+    def __init__(self, uxplay_binary: str, device_name: str, width: int, height: int):
         self.uxplay_binary = uxplay_binary
         self.device_name = device_name
         self.width = int(width)
@@ -100,6 +116,7 @@ class UxPlayCapture:
     def start(self) -> None:
         if self.running:
             return
+
         frame_pipeline = "videoconvert ! video/x-raw,format=BGR ! fdsink fd=1 sync=false"
         cmd = [
             self.uxplay_binary,
@@ -181,7 +198,7 @@ class UxPlayCapture:
 
 
 # -----------------------------
-# ArUco processing (rate-limited)
+# ArUco processing helpers
 # -----------------------------
 def _get_aruco_dictionary(name: str):
     name = name.strip()
@@ -191,25 +208,22 @@ def _get_aruco_dictionary(name: str):
 
 
 def _make_grid_board(cfg: ArucoConfig, dictionary):
-    # OpenCV API differs slightly across versions; try both.
     try:
-        # older OpenCV
         return cv2.aruco.GridBoard_create(
             cfg.cols, cfg.rows, cfg.marker_size_m, cfg.separation_m, dictionary
         )
     except Exception:
-        # newer OpenCV
         return cv2.aruco.GridBoard(
             (cfg.cols, cfg.rows), cfg.marker_size_m, cfg.separation_m, dictionary
         )
 
 
 def _load_intrinsics(path: str):
-    import json, numpy as np
+    import json
     with open(path, "r") as f:
         d = json.load(f)
     K = np.array(d["K"], dtype=np.float32)
-    dist = np.array(d.get("dist", [0,0,0,0,0]), dtype=np.float32).reshape(-1, 1)
+    dist = np.array(d.get("dist", [0, 0, 0, 0, 0]), dtype=np.float32).reshape(-1, 1)
     return K, dist
 
 
@@ -257,13 +271,68 @@ def _rotmat_to_quat_xyzw(R: np.ndarray) -> np.ndarray:
     return np.array([x, y, z, w], dtype=np.float32)
 
 
+# -----------------------------
+# HSV mask helpers
+# -----------------------------
+def _clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+
+def _compute_hsv_mask(frame_bgr: np.ndarray, cfg: HsvFilterConfig) -> np.ndarray:
+    """
+    Binary mask from mean±std in HSV space.
+    Handles hue wrap-around (H is circular).
+    Returns mask uint8 (0 or 255).
+    """
+    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+
+    mh, ms, mv = int(cfg.mean_h), int(cfg.mean_s), int(cfg.mean_v)
+    sh, ss, sv = int(cfg.std_h), int(cfg.std_s), int(cfg.std_v)
+
+    lo_s = _clamp(ms - ss, 0, 255)
+    hi_s = _clamp(ms + ss, 0, 255)
+    lo_v = _clamp(mv - sv, 0, 255)
+    hi_v = _clamp(mv + sv, 0, 255)
+
+    lo_h = mh - sh
+    hi_h = mh + sh
+
+    # Hue range is 0..179
+    if 0 <= lo_h and hi_h <= 179:
+        lower = np.array([lo_h, lo_s, lo_v], dtype=np.uint8)
+        upper = np.array([hi_h, hi_s, hi_v], dtype=np.uint8)
+        return cv2.inRange(hsv, lower, upper)
+
+    lo_h_wrapped = lo_h % 180
+    hi_h_wrapped = hi_h % 180
+
+    if lo_h < 0:
+        # [0..hi_h] OR [lo_h_wrapped..179]
+        lower1 = np.array([0, lo_s, lo_v], dtype=np.uint8)
+        upper1 = np.array([_clamp(hi_h, 0, 179), hi_s, hi_v], dtype=np.uint8)
+        lower2 = np.array([lo_h_wrapped, lo_s, lo_v], dtype=np.uint8)
+        upper2 = np.array([179, hi_s, hi_v], dtype=np.uint8)
+        return cv2.bitwise_or(cv2.inRange(hsv, lower1, upper1), cv2.inRange(hsv, lower2, upper2))
+
+    # hi_h > 179:
+    # [lo_h..179] OR [0..hi_h_wrapped]
+    lower1 = np.array([_clamp(lo_h, 0, 179), lo_s, lo_v], dtype=np.uint8)
+    upper1 = np.array([179, hi_s, hi_v], dtype=np.uint8)
+    lower2 = np.array([0, lo_s, lo_v], dtype=np.uint8)
+    upper2 = np.array([hi_h_wrapped, hi_s, hi_v], dtype=np.uint8)
+    return cv2.bitwise_or(cv2.inRange(hsv, lower1, upper1), cv2.inRange(hsv, lower2, upper2))
+
+
+# -----------------------------
+# ArUco processing (rate-limited)
+# -----------------------------
 class ArucoProcessor:
     """
     Runs ArUco detection at a fixed FPS, using the latest captured frame.
     Stores:
       - latest raw frame (for /rgb)
       - latest annotated frame (for /aruco)
-      - latest board pose (for overlay)
+      - latest board pose payload (for overlay)
     """
 
     def __init__(self, capture: UxPlayCapture, cfg: ArucoConfig, process_fps: float):
@@ -274,15 +343,11 @@ class ArucoProcessor:
         self.dictionary = _get_aruco_dictionary(cfg.dictionary_name)
         self.board = _make_grid_board(cfg, self.dictionary)
 
-        # in ArucoProcessor.__init__ after width/height known:
         self.K, self.dist = _load_intrinsics("intrinsics.json")
         print("Loaded JSON intrinsics:")
         print("K:\n", self.K)
         print("dist:\n", self.dist)
 
-
-
-        # detection params
         try:
             self.detector_params = cv2.aruco.DetectorParameters()
             self.detector = cv2.aruco.ArucoDetector(self.dictionary, self.detector_params)
@@ -302,7 +367,7 @@ class ArucoProcessor:
         self.latest_aruco_jpeg_b64: Optional[str] = None
         self.latest_aruco_ts: Optional[float] = None
 
-        self.latest_pose: Optional[Dict[str, Any]] = None  # pose + ids + corners count
+        self.latest_pose: Optional[Dict[str, Any]] = None
         self.processed_frames = 0
         self.detected_frames = 0
 
@@ -333,6 +398,10 @@ class ArucoProcessor:
                 "pose": self.latest_pose,
             }
 
+    def get_pose(self) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            return None if self.latest_pose is None else dict(self.latest_pose)
+
     def _encode_jpeg_b64(self, bgr: np.ndarray, quality: int = 85) -> str:
         ok, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
         if not ok:
@@ -350,13 +419,11 @@ class ArucoProcessor:
 
     def _estimate_board_pose(self, corners, ids, frame_bgr=None):
         """
-        Try cv2.aruco.estimatePoseBoard if available, otherwise fall back to solvePnP
-        with board corner correspondences. If that is unavailable, fall back to
-        per-marker pose (first detected marker).
+        Try cv2.aruco.estimatePoseBoard if available, otherwise fall back to
+        per-marker pose and solvePnP fallbacks.
         """
-        # Normalize ids to 1D ints for matching
         ids = ids.flatten().astype(int)
-        # Preferred API
+
         if hasattr(cv2.aruco, "estimatePoseBoard"):
             try:
                 return cv2.aruco.estimatePoseBoard(
@@ -365,7 +432,6 @@ class ArucoProcessor:
             except Exception:
                 pass
 
-        # Fallback: single-marker pose (first marker)
         try:
             if hasattr(cv2.aruco, "estimatePoseSingleMarkers"):
                 rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
@@ -376,15 +442,17 @@ class ArucoProcessor:
         except Exception:
             pass
 
-        # Fallback: manual single-marker solvePnP using the first marker
         try:
             s = float(self.cfg.marker_size_m)
-            obj_pts = np.array([
-                [0.0, 0.0, 0.0],
-                [s, 0.0, 0.0],
-                [s, s, 0.0],
-                [0.0, s, 0.0],
-            ], dtype=np.float32)
+            obj_pts = np.array(
+                [
+                    [0.0, 0.0, 0.0],
+                    [s, 0.0, 0.0],
+                    [s, s, 0.0],
+                    [0.0, s, 0.0],
+                ],
+                dtype=np.float32,
+            )
 
             img_pts = np.asarray(corners[0], dtype=np.float32).reshape(-1, 2)
             if img_pts.shape[0] >= 4:
@@ -393,18 +461,20 @@ class ArucoProcessor:
                     img_pts,
                     self.K,
                     self.dist,
-                    flags=cv2.SOLVEPNP_IPPE_SQUARE if hasattr(cv2, "SOLVEPNP_IPPE_SQUARE") else cv2.SOLVEPNP_ITERATIVE
+                    flags=cv2.SOLVEPNP_IPPE_SQUARE
+                    if hasattr(cv2, "SOLVEPNP_IPPE_SQUARE")
+                    else cv2.SOLVEPNP_ITERATIVE,
                 )
                 if ok:
                     return ok, rvec, tvec
         except Exception:
             pass
 
-        # Fallback: manual solvePnP using board.objPoints mapping to detected ids
         try:
             obj_pts = []
             img_pts = []
             board_ids = np.array(self.board.ids).flatten() if hasattr(self.board, "ids") else np.array([])
+
             for corner, marker_id in zip(corners, ids.flatten()):
                 if board_ids.size == 0:
                     continue
@@ -424,7 +494,7 @@ class ArucoProcessor:
                     img_pts,
                     self.K,
                     self.dist,
-                    flags=cv2.SOLVEPNP_ITERATIVE
+                    flags=cv2.SOLVEPNP_ITERATIVE,
                 )
                 if ok:
                     return ok, rvec, tvec
@@ -445,14 +515,12 @@ class ArucoProcessor:
                 time.sleep(0.01)
                 continue
 
-            # Always publish latest RGB feed (cheap)
             try:
                 rgb_b64 = self._encode_jpeg_b64(frame, quality=85)
             except Exception as e:
                 logger.warning("RGB encode failed: %s", e)
                 rgb_b64 = None
 
-            # Run ArUco detection
             annotated = frame.copy()
             pose_payload = {
                 "detected": False,
@@ -473,9 +541,7 @@ class ArucoProcessor:
 
                     cv2.aruco.drawDetectedMarkers(annotated, corners, ids)
 
-                    # Board pose estimate (new API first, then fallback)
                     retval, rvec, tvec = self._estimate_board_pose(corners, ids, frame_bgr=annotated)
-
                     if rvec is not None and tvec is not None:
                         T = _rvec_tvec_to_T(rvec, tvec)
                         quat = _rotmat_to_quat_xyzw(T[:3, :3])
@@ -486,14 +552,11 @@ class ArucoProcessor:
                         pose_payload["tvec"] = tvec.reshape(3).astype(float).tolist()
                         pose_payload["quaternion_xyzw"] = quat.astype(float).tolist()
 
-                        # Only draw marker highlights (axes removed to keep RGB clean)
-
                         self.detected_frames += 1
 
             except Exception as e:
                 logger.warning("Aruco detection failed: %s", e)
 
-            # Encode annotated frame
             try:
                 aruco_b64 = self._encode_jpeg_b64(annotated, quality=85)
             except Exception as e:
@@ -510,7 +573,6 @@ class ArucoProcessor:
                 self.latest_pose = pose_payload
                 self.processed_frames += 1
 
-            # sleep to maintain processing FPS
             elapsed = time.time() - t0
             sleep_s = period - elapsed
             if sleep_s > 0:
@@ -528,22 +590,24 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
 
     @app.route("/health", methods=["GET"])
     def health():
-        return jsonify({
-            "status": "ok",
-            "uxplay_running": capture.running,
-            "frames_received": capture.frames_received,
-            "processed_frames": processor.processed_frames,
-            "detected_frames": processor.detected_frames,
-            "resolution": f"{capture.width}x{capture.height}",
-            "process_fps": processor.process_fps,
-        }), 200
+        with hsv_lock:
+            hsv_state = vars(hsv_cfg).copy()
+
+        return jsonify(
+            {
+                "status": "ok",
+                "uxplay_running": capture.running,
+                "frames_received": capture.frames_received,
+                "processed_frames": processor.processed_frames,
+                "detected_frames": processor.detected_frames,
+                "resolution": f"{capture.width}x{capture.height}",
+                "process_fps": processor.process_fps,
+                "hsv_filter": hsv_state,
+            }
+        ), 200
 
     @app.route("/rgb", methods=["GET"])
     def rgb():
-        """
-        VisionOS: poll this for the background RGB feed.
-        Returns: { rgb: data:image/jpeg;base64,..., timestamp: float }
-        """
         out = processor.get_rgb()
         if out["rgb"] is None:
             return jsonify({"error": "No frame available yet"}), 503
@@ -551,25 +615,6 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
 
     @app.route("/aruco", methods=["GET"])
     def aruco():
-        """
-        VisionOS: poll this for RGB + board pose for overlay.
-
-        Returns:
-          {
-            rgb: data:image/jpeg;base64,...,
-            timestamp: float,
-            pose: {
-              detected: bool,
-              marker_ids: [..],
-              board_pose_camera_T_4x4: [[..],[..],[..],[..]] or null,
-              rvec: [..] or null,
-              tvec: [..] or null,
-              quaternion_xyzw: [..] or null,
-              num_markers: int,
-              K: [[..],[..],[..]]
-            }
-          }
-        """
         out = processor.get_aruco()
         if out["rgb"] is None:
             return jsonify({"error": "No frame available yet"}), 503
@@ -577,21 +622,12 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
 
     @app.route("/head_pose", methods=["POST"])
     def head_pose():
-        """
-        Accept head pose updates from visionOS.
-
-        Expected JSON:
-          position: [x, y, z]
-          quaternion: [x, y, z, w]
-          timestamp: float (optional)
-        """
         data = request.get_json(force=True, silent=True) or {}
         position = data.get("position")
         quaternion = data.get("quaternion")
         timestamp = float(data.get("timestamp", time.time()))
 
-        if not (isinstance(position, list) and len(position) == 3
-                and isinstance(quaternion, list) and len(quaternion) == 4):
+        if not (isinstance(position, list) and len(position) == 3 and isinstance(quaternion, list) and len(quaternion) == 4):
             return jsonify({"error": "Invalid payload"}), 400
 
         with head_pose_lock:
@@ -599,7 +635,7 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
             head_pose_latest = {
                 "position": [float(x) for x in position],
                 "quaternion": [float(x) for x in quaternion],
-                "timestamp": timestamp
+                "timestamp": timestamp,
             }
             now = time.time()
             head_pose_meta["receive_time"] = now
@@ -614,9 +650,6 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
 
     @app.route("/get_head_pose", methods=["GET"])
     def get_head_pose():
-        """
-        Return the most recent head pose (if any) along with age and reception stats.
-        """
         with head_pose_lock:
             if head_pose_latest is None:
                 return jsonify({"error": "No head pose received yet"}), 404
@@ -627,68 +660,301 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
         if meta.get("receive_time") is not None:
             age = time.time() - meta["receive_time"]
 
-        latest.update({
-            "age_seconds": age,
-            "reception_count": meta.get("reception_count", 0),
-            "reception_rate": meta.get("reception_rate"),
-        })
+        latest.update(
+            {
+                "age_seconds": age,
+                "reception_count": meta.get("reception_count", 0),
+                "reception_rate": meta.get("reception_rate"),
+            }
+        )
         return jsonify(latest), 200
+
+    @app.route("/hsv_config", methods=["GET", "POST"])
+    def hsv_config_route():
+        """
+        GET: returns current HSV mean/std config
+        POST: updates fields: mean_h, mean_s, mean_v, std_h, std_s, std_v, enabled
+        """
+        if request.method == "GET":
+            with hsv_lock:
+                return jsonify(
+                    {
+                        "mean_h": hsv_cfg.mean_h,
+                        "mean_s": hsv_cfg.mean_s,
+                        "mean_v": hsv_cfg.mean_v,
+                        "std_h": hsv_cfg.std_h,
+                        "std_s": hsv_cfg.std_s,
+                        "std_v": hsv_cfg.std_v,
+                        "enabled": hsv_cfg.enabled,
+                    }
+                ), 200
+
+        data = request.get_json(force=True, silent=True) or {}
+        with hsv_lock:
+            for k in ["mean_h", "mean_s", "mean_v", "std_h", "std_s", "std_v"]:
+                if k in data:
+                    try:
+                        v = int(float(data[k]))
+                    except Exception:
+                        continue
+                    if k == "mean_h":
+                        hsv_cfg.mean_h = _clamp(v, 0, 179)
+                    elif k in ("mean_s", "mean_v"):
+                        setattr(hsv_cfg, k, _clamp(v, 0, 255))
+                    elif k == "std_h":
+                        hsv_cfg.std_h = _clamp(v, 0, 90)
+                    else:
+                        setattr(hsv_cfg, k, _clamp(v, 0, 127))
+
+            if "enabled" in data:
+                hsv_cfg.enabled = bool(data["enabled"])
+
+            return jsonify(
+                {
+                    "status": "ok",
+                    "mean_h": hsv_cfg.mean_h,
+                    "mean_s": hsv_cfg.mean_s,
+                    "mean_v": hsv_cfg.mean_v,
+                    "std_h": hsv_cfg.std_h,
+                    "std_s": hsv_cfg.std_s,
+                    "std_v": hsv_cfg.std_v,
+                    "enabled": hsv_cfg.enabled,
+                }
+            ), 200
+
+    @app.route("/debug", methods=["GET"])
+    def debug_page():
+        html = r"""
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Debug Views</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 14px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+    .panel { border: 1px solid #ddd; border-radius: 8px; overflow: hidden; }
+    .hdr { padding: 8px 10px; background: #f7f7f7; border-bottom: 1px solid #eee; font-weight: 600; }
+    img { width: 100%; display: block; background: #000; }
+    .controls { margin-top: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 8px; }
+    .row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+    .row label { width: 120px; }
+    input[type="range"] { width: 320px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  </style>
+</head>
+<body>
+  <h2 style="margin: 0 0 10px 0;">Debug Views</h2>
+
+  <div class="grid">
+    <div class="panel">
+      <div class="hdr">Raw (UxPlay)</div>
+      <img id="raw" src="/mjpeg?view=raw" />
+    </div>
+    <div class="panel">
+      <div class="hdr">Overlay (Pose)</div>
+      <img id="overlay" src="/mjpeg?view=overlay" />
+    </div>
+    <div class="panel">
+      <div class="hdr">Mask (HSV mean ± std)</div>
+      <img id="mask" src="/mjpeg?view=mask" />
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="row">
+      <label>Enabled</label>
+      <input id="enabled" type="checkbox" />
+    </div>
+
+    <div class="row">
+      <label>Mean color</label>
+      <input id="color" type="color" value="#ccaa33" />
+      <span class="mono" id="meanOut"></span>
+    </div>
+
+    <div class="row">
+      <label>Std H</label>
+      <input id="stdH" type="range" min="0" max="90" value="10" />
+      <span class="mono" id="stdHOut"></span>
+    </div>
+    <div class="row">
+      <label>Std S</label>
+      <input id="stdS" type="range" min="0" max="127" value="40" />
+      <span class="mono" id="stdSOut"></span>
+    </div>
+    <div class="row">
+      <label>Std V</label>
+      <input id="stdV" type="range" min="0" max="127" value="40" />
+      <span class="mono" id="stdVOut"></span>
+    </div>
+  </div>
+
+<script>
+function hexToRgb(hex) {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return m ? { r: parseInt(m[1],16), g: parseInt(m[2],16), b: parseInt(m[3],16) } : {r:0,g:0,b:0};
+}
+
+// Convert RGB [0..255] to HSV like OpenCV: H [0..179], S,V [0..255]
+function rgbToOpenCvHsv(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const mx = Math.max(r,g,b), mn = Math.min(r,g,b);
+  const d = mx - mn;
+
+  let h = 0;
+  if (d === 0) h = 0;
+  else if (mx === r) h = ((g - b) / d) % 6;
+  else if (mx === g) h = ((b - r) / d) + 2;
+  else h = ((r - g) / d) + 4;
+
+  h = Math.round((h * 60 + 360) % 360); // 0..360
+  const s = mx === 0 ? 0 : d / mx;      // 0..1
+  const v = mx;                         // 0..1
+
+  const H = Math.round(h / 2);          // 0..179
+  const S = Math.round(s * 255);
+  const V = Math.round(v * 255);
+  return {H, S, V};
+}
+
+async function postCfg(payload) {
+  await fetch("/hsv_config", {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify(payload)
+  });
+}
+
+async function loadCfg() {
+  const r = await fetch("/hsv_config");
+  const j = await r.json();
+
+  document.getElementById("enabled").checked = !!j.enabled;
+  document.getElementById("stdH").value = j.std_h;
+  document.getElementById("stdS").value = j.std_s;
+  document.getElementById("stdV").value = j.std_v;
+
+  document.getElementById("meanOut").textContent = `mean HSV: ${j.mean_h}, ${j.mean_s}, ${j.mean_v}`;
+  document.getElementById("stdHOut").textContent = j.std_h;
+  document.getElementById("stdSOut").textContent = j.std_s;
+  document.getElementById("stdVOut").textContent = j.std_v;
+}
+
+function wire() {
+  const enabled = document.getElementById("enabled");
+  const color = document.getElementById("color");
+  const stdH = document.getElementById("stdH");
+  const stdS = document.getElementById("stdS");
+  const stdV = document.getElementById("stdV");
+
+  enabled.addEventListener("change", () => postCfg({enabled: enabled.checked}));
+
+  color.addEventListener("input", () => {
+    const {r,g,b} = hexToRgb(color.value);
+    const hsv = rgbToOpenCvHsv(r,g,b);
+    document.getElementById("meanOut").textContent = `mean HSV: ${hsv.H}, ${hsv.S}, ${hsv.V}`;
+    postCfg({mean_h: hsv.H, mean_s: hsv.S, mean_v: hsv.V});
+  });
+
+  function sliderChanged() {
+    document.getElementById("stdHOut").textContent = stdH.value;
+    document.getElementById("stdSOut").textContent = stdS.value;
+    document.getElementById("stdVOut").textContent = stdV.value;
+    postCfg({std_h: stdH.value, std_s: stdS.value, std_v: stdV.value});
+  }
+
+  stdH.addEventListener("input", sliderChanged);
+  stdS.addEventListener("input", sliderChanged);
+  stdV.addEventListener("input", sliderChanged);
+}
+
+loadCfg().then(wire);
+</script>
+</body>
+</html>
+"""
+        return Response(html, mimetype="text/html")
 
     @app.route("/mjpeg", methods=["GET"])
     def mjpeg():
         """
-        MJPEG stream with detection highlights; includes pose axes/text overlay if available.
+        MJPEG stream with multiple views:
+          /mjpeg?view=raw      -> raw UxPlay feed
+          /mjpeg?view=overlay  -> raw + pose overlay (axes/text when detected)
+          /mjpeg?view=mask     -> HSV mean±std binary mask view
         """
+        view = (request.args.get("view", "overlay") or "overlay").lower().strip()
+        if view not in ("raw", "overlay", "mask"):
+            view = "overlay"
+
         K = processor.K.copy()
         dist = processor.dist.copy()
 
         def draw_axes(frame, rvec, tvec, length=0.12):
             try:
-                axes = np.float32([
-                    [0, 0, 0],
-                    [length, 0, 0],
-                    [0, length, 0],
-                    [0, 0, length],
-                ])
+                axes = np.float32(
+                    [
+                        [0, 0, 0],
+                        [length, 0, 0],
+                        [0, length, 0],
+                        [0, 0, length],
+                    ]
+                )
                 img_pts, _ = cv2.projectPoints(axes, rvec, tvec, K, dist)
                 pts = img_pts.reshape(-1, 2).astype(int)
                 origin = tuple(pts[0])
                 colors = [(0, 0, 255), (0, 255, 0), (255, 0, 0)]  # BGR
                 for i in range(1, 4):
-                    cv2.line(frame, origin, tuple(pts[i]), colors[i-1], 2, cv2.LINE_AA)
+                    cv2.line(frame, origin, tuple(pts[i]), colors[i - 1], 2, cv2.LINE_AA)
             except Exception:
                 pass
             return frame
 
         def gen():
             while True:
-                out = processor.get_aruco()
-                if out["rgb"] is None:
-                    time.sleep(0.05)
+                frame_bgr, _ts = capture.get_latest()
+                if frame_bgr is None:
+                    time.sleep(0.02)
                     continue
 
-                frame_b64 = out["rgb"].split(",", 1)[1]
-                frame = cv2.imdecode(np.frombuffer(base64.b64decode(frame_b64), dtype=np.uint8), cv2.IMREAD_COLOR)
+                out = frame_bgr.copy()
 
-                pose = out.get("pose") or {}
-                if pose.get("detected") and pose.get("rvec") and pose.get("tvec"):
-                    rvec = np.array(pose["rvec"], dtype=np.float32).reshape(3, 1)
-                    tvec = np.array(pose["tvec"], dtype=np.float32).reshape(3, 1)
-                    frame = draw_axes(frame, rvec, tvec, length=processor.cfg.axis_length_m)
-                    text = f"Pose (m): x={tvec[0][0]:.3f} y={tvec[1][0]:.3f} z={tvec[2][0]:.3f}"
-                    cv2.putText(frame, text, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
+                if view == "overlay":
+                    pose = processor.get_pose() or {}
+                    if pose.get("detected") and pose.get("rvec") and pose.get("tvec"):
+                        rvec = np.array(pose["rvec"], dtype=np.float32).reshape(3, 1)
+                        tvec = np.array(pose["tvec"], dtype=np.float32).reshape(3, 1)
+                        out = draw_axes(out, rvec, tvec, length=processor.cfg.axis_length_m)
+                        txt = f"t (m): x={tvec[0][0]:.3f} y={tvec[1][0]:.3f} z={tvec[2][0]:.3f}"
+                        cv2.putText(out, txt, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
+                    else:
+                        cv2.putText(out, "pose: not detected", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
 
-                ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                elif view == "mask":
+                    with hsv_lock:
+                        cfg = HsvFilterConfig(**vars(hsv_cfg))  # copy
+                    if cfg.enabled:
+                        mask = _compute_hsv_mask(out, cfg)
+                        out = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+                        hud = f"mean HSV=({cfg.mean_h},{cfg.mean_s},{cfg.mean_v}) std=({cfg.std_h},{cfg.std_s},{cfg.std_v})"
+                        cv2.putText(out, hud, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+                    else:
+                        out[:] = 0
+                        cv2.putText(out, "mask disabled", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+
+                ok, buf = cv2.imencode(".jpg", out, [cv2.IMWRITE_JPEG_QUALITY, 85])
                 if not ok:
-                    time.sleep(0.05)
+                    time.sleep(0.02)
                     continue
                 jpg = buf.tobytes()
 
-                yield (b"--frame\r\n"
-                       b"Content-Type: image/jpeg\r\n"
-                       b"Content-Length: " + str(len(jpg)).encode() + b"\r\n\r\n" +
-                       jpg + b"\r\n")
-                time.sleep(0.03)  # stream throttle
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n"
+                    b"Content-Length: " + str(len(jpg)).encode() + b"\r\n\r\n" + jpg + b"\r\n"
+                )
+                time.sleep(0.03)
 
         return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
@@ -711,7 +977,6 @@ def find_uxplay_binary(user_path: Optional[str]) -> str:
         if os.path.exists(p):
             return p
 
-    # fallback: which
     try:
         r = subprocess.run(["which", "uxplay"], capture_output=True, text=True, timeout=2)
         if r.returncode == 0:
@@ -785,7 +1050,7 @@ def main():
     signal.signal(signal.SIGTERM, shutdown)
 
     logger.info("API running on http://%s:%d", args.host, args.port)
-    logger.info("Endpoints: /health  /rgb  /aruco  (optional /mjpeg)")
+    logger.info("Endpoints: /health  /rgb  /aruco  /mjpeg?view=raw|overlay|mask  /debug  /hsv_config")
     app.run(host=args.host, port=args.port, debug=False, use_reloader=False, threaded=True)
 
 
