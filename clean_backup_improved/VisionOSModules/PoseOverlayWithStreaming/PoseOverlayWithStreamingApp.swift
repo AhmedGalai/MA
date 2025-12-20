@@ -24,6 +24,7 @@ struct PoseOverlayWithStreamingApp: App {
             .environmentObject(calibrationManager)
             .environmentObject(rsPoseModel)
             .environmentObject(logStore)
+            .environmentObject(arrowSettings)
 
         WindowGroup("Anchor Setup", id: "anchor") { AnchorSetupView() }
             .environmentObject(appModel)

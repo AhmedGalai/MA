@@ -33,7 +33,7 @@ struct ContentView: View {
             Spacer(minLength: 0)
         }
         .padding()
-        .task { await initializeConnection() }
+        .task { initializeConnection() }
     }
 
     // MARK: - Sections
@@ -153,14 +153,16 @@ struct ContentView: View {
     }
 
     // MARK: - Actions
-    private func initializeConnection() async {
+    private func initializeConnection() {
         hostField = storedHost
         portField = storedPort
-        await applyConnection()
-        await MainActor.run {
-            sensorModel.start()
+        Task {
+            await applyConnection()
+            await MainActor.run {
+                sensorModel.start()
+            }
+            await loadModelsIfNeeded()
         }
-        await loadModelsIfNeeded()
     }
 
     private func applyConnection() async {
