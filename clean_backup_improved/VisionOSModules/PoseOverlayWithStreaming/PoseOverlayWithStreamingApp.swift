@@ -43,6 +43,10 @@ struct PoseOverlayWithStreamingApp: App {
             .environmentObject(foundationPoseModel)
             .environmentObject(logStore)
 
+        WindowGroup("Help", id: "help") { HelpView() }
+            .environmentObject(appModel)
+            .environmentObject(logStore)
+
         ImmersiveSpace(id: "PoseSpace") { ImmersiveSpaceView() }
             .environmentObject(appModel)
             .environmentObject(sensorModel)

@@ -110,6 +110,8 @@ foundationpose_latest = {
 }
 foundationpose_save_lock = threading.Lock()
 foundationpose_save_next = False
+processing_stride_lock = threading.Lock()
+processing_stride = 1
 
 # -----------------------------
 # ArUco config (edit as needed)
@@ -695,6 +697,7 @@ class ArucoProcessor:
     def _loop(self):
         logger.info("Aruco processor thread started (fps=%.2f)", self.process_fps)
         period = 1.0 / max(0.1, self.process_fps)
+        frame_index = 0
 
         while self.running:
             t0 = time.time()
@@ -710,6 +713,8 @@ class ArucoProcessor:
                 logger.warning("RGB encode failed: %s", e)
                 rgb_b64 = None
 
+            frame_index += 1
+            stride = _get_processing_stride()
             annotated = frame.copy()
             pose_payload = {
                 "detected": False,
@@ -721,6 +726,16 @@ class ArucoProcessor:
                 "num_markers": 0,
                 "K": self.K.tolist(),
             }
+
+            if stride > 1 and (frame_index % stride) != 0:
+                with self._lock:
+                    self.latest_rgb_jpeg_b64 = rgb_b64
+                    self.latest_rgb_ts = ts
+                elapsed = time.time() - t0
+                sleep_s = period - elapsed
+                if sleep_s > 0:
+                    time.sleep(sleep_s)
+                continue
 
             try:
                 corners, ids = self._detect(frame)
@@ -786,6 +801,7 @@ def _start_rs_aruco_worker() -> threading.Thread:
     rs_cfg = CONFIG["aruco"]
 
     def loop():
+        frame_index = 0
         while True:
             if rs_capture is None:
                 time.sleep(0.05)
@@ -796,6 +812,12 @@ def _start_rs_aruco_worker() -> threading.Thread:
             ts = latest.get("timestamp") or time.time()
             if rgb is None or K is None:
                 time.sleep(0.02)
+                continue
+
+            frame_index += 1
+            stride = _get_processing_stride()
+            if stride > 1 and (frame_index % stride) != 0:
+                time.sleep(0.05)
                 continue
 
             overlay = rgb.copy()
@@ -880,6 +902,11 @@ def _consume_save_next_foundationpose() -> bool:
     return False
 
 
+def _get_processing_stride() -> int:
+    with processing_stride_lock:
+        return max(1, int(processing_stride))
+
+
 def _save_foundationpose_request(
     rgb: np.ndarray,
     depth: np.ndarray,
@@ -911,6 +938,7 @@ def _save_foundationpose_request(
 
 def _start_foundationpose_worker(capture: UxPlayCapture, processor: "ArucoProcessor") -> threading.Thread:
     def loop():
+        frame_index = 0
         while True:
             frame, ts = capture.get_latest()
             if frame is None:
@@ -918,6 +946,12 @@ def _start_foundationpose_worker(capture: UxPlayCapture, processor: "ArucoProces
                     foundationpose_latest.update(
                         {"pose_matrix": None, "timestamp": None, "message": "No AVP frame yet", "success": False}
                     )
+                time.sleep(0.2)
+                continue
+
+            frame_index += 1
+            stride = _get_processing_stride()
+            if stride > 1 and (frame_index % stride) != 0:
                 time.sleep(0.2)
                 continue
 
@@ -1075,6 +1109,21 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
         with foundationpose_save_lock:
             foundationpose_save_next = enabled
         return jsonify({"enabled": foundationpose_save_next}), 200
+
+    @app.route("/processing_stride", methods=["GET", "POST"])
+    def processing_stride_route():
+        """
+        Control how often frames are processed (1 = every frame, 2 = every 2nd frame, etc.).
+        """
+        global processing_stride
+        if request.method == "GET":
+            return jsonify({"stride": _get_processing_stride()}), 200
+
+        data = request.get_json(silent=True) or {}
+        stride = int(data.get("stride", 1))
+        with processing_stride_lock:
+            processing_stride = max(1, stride)
+        return jsonify({"stride": _get_processing_stride()}), 200
 
     @app.route("/models", methods=["GET"])
     def models():
@@ -1514,10 +1563,6 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
     .panel { border: 1px solid #ddd; border-radius: 8px; overflow: hidden; }
     .hdr { padding: 8px 10px; background: #f7f7f7; border-bottom: 1px solid #eee; font-weight: 600; }
     img { width: 100%; display: block; background: #000; }
-    .controls { margin-top: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 8px; }
-    .row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
-    .row label { width: 120px; }
-    input[type="range"] { width: 320px; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
   </style>
 </head>
@@ -1559,116 +1604,6 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
     </div>
   </div>
 
-  <div class="controls">
-    <div class="row">
-      <label>Enabled</label>
-      <input id="enabled" type="checkbox" />
-    </div>
-
-    <div class="row">
-      <label>Mean color</label>
-      <input id="color" type="color" value="#00ffff" />
-      <span class="mono" id="meanOut"></span>
-    </div>
-
-    <div class="row">
-      <label>Std H</label>
-      <input id="stdH" type="range" min="0" max="90" value="10" />
-      <span class="mono" id="stdHOut"></span>
-    </div>
-    <div class="row">
-      <label>Std S</label>
-      <input id="stdS" type="range" min="0" max="127" value="40" />
-      <span class="mono" id="stdSOut"></span>
-    </div>
-    <div class="row">
-      <label>Std V</label>
-      <input id="stdV" type="range" min="0" max="127" value="40" />
-      <span class="mono" id="stdVOut"></span>
-    </div>
-  </div>
-
-<script>
-function hexToRgb(hex) {
-  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-  return m ? { r: parseInt(m[1],16), g: parseInt(m[2],16), b: parseInt(m[3],16) } : {r:0,g:0,b:0};
-}
-
-// Convert RGB [0..255] to HSV like OpenCV: H [0..179], S,V [0..255]
-function rgbToOpenCvHsv(r, g, b) {
-  r /= 255; g /= 255; b /= 255;
-  const mx = Math.max(r,g,b), mn = Math.min(r,g,b);
-  const d = mx - mn;
-
-  let h = 0;
-  if (d === 0) h = 0;
-  else if (mx === r) h = ((g - b) / d) % 6;
-  else if (mx === g) h = ((b - r) / d) + 2;
-  else h = ((r - g) / d) + 4;
-
-  h = Math.round((h * 60 + 360) % 360); // 0..360
-  const s = mx === 0 ? 0 : d / mx;      // 0..1
-  const v = mx;                         // 0..1
-
-  const H = Math.round(h / 2);          // 0..179
-  const S = Math.round(s * 255);
-  const V = Math.round(v * 255);
-  return {H, S, V};
-}
-
-async function postCfg(payload) {
-  await fetch("/hsv_config", {
-    method: "POST",
-    headers: {"Content-Type":"application/json"},
-    body: JSON.stringify(payload)
-  });
-}
-
-async function loadCfg() {
-  const r = await fetch("/hsv_config");
-  const j = await r.json();
-
-  document.getElementById("enabled").checked = !!j.enabled;
-  document.getElementById("stdH").value = j.std_h;
-  document.getElementById("stdS").value = j.std_s;
-  document.getElementById("stdV").value = j.std_v;
-
-  document.getElementById("meanOut").textContent = `mean HSV: ${j.mean_h}, ${j.mean_s}, ${j.mean_v}`;
-  document.getElementById("stdHOut").textContent = j.std_h;
-  document.getElementById("stdSOut").textContent = j.std_s;
-  document.getElementById("stdVOut").textContent = j.std_v;
-}
-
-function wire() {
-  const enabled = document.getElementById("enabled");
-  const color = document.getElementById("color");
-  const stdH = document.getElementById("stdH");
-  const stdS = document.getElementById("stdS");
-  const stdV = document.getElementById("stdV");
-
-  enabled.addEventListener("change", () => postCfg({enabled: enabled.checked}));
-
-  color.addEventListener("input", () => {
-    const {r,g,b} = hexToRgb(color.value);
-    const hsv = rgbToOpenCvHsv(r,g,b);
-    document.getElementById("meanOut").textContent = `mean HSV: ${hsv.H}, ${hsv.S}, ${hsv.V}`;
-    postCfg({mean_h: hsv.H, mean_s: hsv.S, mean_v: hsv.V});
-  });
-
-  function sliderChanged() {
-    document.getElementById("stdHOut").textContent = stdH.value;
-    document.getElementById("stdSOut").textContent = stdS.value;
-    document.getElementById("stdVOut").textContent = stdV.value;
-    postCfg({std_h: stdH.value, std_s: stdS.value, std_v: stdV.value});
-  }
-
-  stdH.addEventListener("input", sliderChanged);
-  stdS.addEventListener("input", sliderChanged);
-  stdV.addEventListener("input", sliderChanged);
-}
-
-loadCfg().then(wire);
-</script>
 </body>
 </html>
 """

@@ -33,6 +33,7 @@
 		AA0000000000000000001018 /* RealSensePoseModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000002024 /* RealSensePoseModel.swift */; };
 		AA0000000000000000001019 /* AnchorSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000002025 /* AnchorSetupView.swift */; };
 		AA000000000000000000101A /* FoundationPoseModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000002026 /* FoundationPoseModel.swift */; };
+		AA000000000000000000101B /* HelpView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000002027 /* HelpView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -64,6 +65,7 @@
 		AA0000000000000000002024 /* RealSensePoseModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealSensePoseModel.swift; sourceTree = "<group>"; };
 		AA0000000000000000002025 /* AnchorSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnchorSetupView.swift; sourceTree = "<group>"; };
 		AA0000000000000000002026 /* FoundationPoseModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FoundationPoseModel.swift; sourceTree = "<group>"; };
+		AA0000000000000000002027 /* HelpView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -163,6 +165,7 @@
 				AA0000000000000000002018 /* ROIOverlayView.swift */,
 				AA0000000000000000002019 /* SensorMonitorView.swift */,
 				AA000000000000000000201A /* DebugDashboardView.swift */,
+				AA0000000000000000002027 /* HelpView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -243,6 +246,7 @@
 				AA0000000000000000001018 /* RealSensePoseModel.swift in Sources */,
 				AA0000000000000000001019 /* AnchorSetupView.swift in Sources */,
 				AA000000000000000000101A /* FoundationPoseModel.swift in Sources */,
+				AA000000000000000000101B /* HelpView.swift in Sources */,
 				AA0000000000000000001013 /* SensorMonitorView.swift in Sources */,
 				AA0000000000000000001003 /* ArrowSettings.swift in Sources */,
 				AA0000000000000000001012 /* ROIOverlayView.swift in Sources */,

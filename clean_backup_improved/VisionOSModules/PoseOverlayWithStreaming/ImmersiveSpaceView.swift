@@ -18,6 +18,7 @@ struct ImmersiveSpaceView: View {
     @State private var rsAxes: Entity?
     @State private var foundationAxes: Entity?
     @State private var lastFoundationMessage: String?
+    @State private var foundationFallbackActive = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -115,8 +116,14 @@ struct ImmersiveSpaceView: View {
         if let matrix = foundationPoseModel.poseMatrix {
             foundationAxes.isEnabled = true
             foundationAxes.transform = Transform(matrix: matrix)
+            foundationFallbackActive = false
         } else {
-            foundationAxes.isEnabled = false
+            foundationAxes.isEnabled = true
+            foundationAxes.transform = Transform()
+            if !foundationFallbackActive {
+                foundationFallbackActive = true
+                logs.add("FoundationPose: using anchor fallback")
+            }
             if let msg = foundationPoseModel.lastMessage, msg != lastFoundationMessage {
                 lastFoundationMessage = msg
                 logs.add("FoundationPose: \(msg)")

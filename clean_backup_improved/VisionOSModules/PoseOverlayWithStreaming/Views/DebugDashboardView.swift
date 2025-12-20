@@ -68,6 +68,7 @@ final class DebugDashboardModel: ObservableObject {
     @Published var avpLastFetchTime: Date?
 
     @Published var saveNextFoundationPose = false
+    @Published var processingStride: Int = 1
 
     // HSV parameters (mean color + std deviation)
     @Published var hsvMeanH: Int = 90
@@ -131,6 +132,7 @@ final class DebugDashboardModel: ObservableObject {
         async let poseInAVPTask = fetchPoseInAVP(baseURL: baseURL)
         async let foundationPoseTask = fetchFoundationPose(baseURL: baseURL)
         async let hsvTask = fetchHSVConfig(baseURL: baseURL)
+        async let strideTask = fetchProcessingStride(baseURL: baseURL)
 
         do { self.health = try await healthTask } catch { errors.append(error.localizedDescription) }
         do {
@@ -153,6 +155,7 @@ final class DebugDashboardModel: ObservableObject {
             foundationPoseMessage = fp.message
         } catch { errors.append(error.localizedDescription) }
         do { applyHSVConfig(try await hsvTask) } catch { errors.append(error.localizedDescription) }
+        do { processingStride = try await strideTask } catch { errors.append(error.localizedDescription) }
 
         self.lastError = errors.isEmpty ? nil : errors.joined(separator: " | ")
         self.avpLastFetchTime = Date()
@@ -170,6 +173,7 @@ final class DebugDashboardModel: ObservableObject {
         async let avpMaskTask = fetchAVPMask(baseURL: baseURL)
         async let hsvTask = fetchHSVConfig(baseURL: baseURL)
         async let foundationPoseTask = fetchFoundationPose(baseURL: baseURL)
+        async let strideTask = fetchProcessingStride(baseURL: baseURL)
 
         do { self.avpFrame = try await avpLatestTask } catch { errors.append(error.localizedDescription) }
         do {
@@ -189,6 +193,7 @@ final class DebugDashboardModel: ObservableObject {
             foundationPoseMatrix = fp.poseMatrix
             foundationPoseMessage = fp.message
         } catch { errors.append(error.localizedDescription) }
+        do { processingStride = try await strideTask } catch { errors.append(error.localizedDescription) }
 
         self.avpLastFetchTime = Date()
         self.lastError = errors.isEmpty ? nil : errors.joined(separator: " | ")
@@ -234,6 +239,9 @@ private extension DebugDashboardModel {
         let pose_matrix: [[Double]]?
         let message: String?
         let success: Bool?
+    }
+    struct ProcessingStrideResponse: Decodable {
+        let stride: Int
     }
     struct HSVConfigResponse: Decodable {
         let mean_h: Int
@@ -366,6 +374,12 @@ private extension DebugDashboardModel {
         let data = try await performRequest(baseURL: baseURL, path: "get_foundationpose_pose")
         let response = try JSONDecoder().decode(FoundationPoseResponse.self, from: data)
         return (poseMatrix: response.pose_matrix, message: response.message)
+    }
+
+    func fetchProcessingStride(baseURL: URL) async throws -> Int {
+        let data = try await performRequest(baseURL: baseURL, path: "processing_stride")
+        let response = try JSONDecoder().decode(ProcessingStrideResponse.self, from: data)
+        return max(1, response.stride)
     }
 
     func fetchTransformedDepth(baseURL: URL) async throws -> FrameState {
@@ -502,6 +516,18 @@ private extension DebugDashboardModel {
             _ = try? await URLSession.shared.data(for: request)
         }
     }
+
+    func postProcessingStride(_ stride: Int) {
+        guard let baseURL else { return }
+        var request = URLRequest(url: baseURL.appendingPathComponent("processing_stride"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let payload: [String: Any] = ["stride": stride]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+        Task {
+            _ = try? await URLSession.shared.data(for: request)
+        }
+    }
 }
 
 // MARK: - View
@@ -518,6 +544,8 @@ struct DebugDashboardView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     connectionStatus
                     matricesSection
+                    processingSection
+                    hsvControlsSection
                     framesSection
                     logsSection
                     sensorSection
@@ -583,14 +611,16 @@ struct DebugDashboardView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Matrices & Intrinsics")
                 .font(.headline)
-            MatrixCard(title: "RS Intrinsics", matrix: model.intrinsics.rs)
-            MatrixCard(title: "AVP Intrinsics", matrix: model.intrinsics.avp)
-            MatrixCard(title: "T_avp_rs", matrix: model.transforms.avpRS)
-            MatrixCard(title: "T_world_rs", matrix: model.transforms.worldRS)
-            MatrixCard(title: "T_world_avp", matrix: model.transforms.worldAVP)
-            MatrixCard(title: "AVP ArUco Pose", matrix: model.transforms.avpBoard ?? model.avpBoardPose)
-            MatrixCard(title: "RS Pose in AVP", matrix: model.poseInAVP.matrix)
-            MatrixCard(title: "FoundationPose", matrix: model.foundationPoseMatrix)
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                MatrixCard(title: "RS Intrinsics", matrix: model.intrinsics.rs)
+                MatrixCard(title: "AVP Intrinsics", matrix: model.intrinsics.avp)
+                MatrixCard(title: "T_avp_rs", matrix: model.transforms.avpRS)
+                MatrixCard(title: "T_world_rs", matrix: model.transforms.worldRS)
+                MatrixCard(title: "T_world_avp", matrix: model.transforms.worldAVP)
+                MatrixCard(title: "AVP ArUco Pose", matrix: model.transforms.avpBoard ?? model.avpBoardPose)
+                MatrixCard(title: "RS Pose in AVP", matrix: model.poseInAVP.matrix)
+                MatrixCard(title: "FoundationPose", matrix: model.foundationPoseMatrix)
+            }
             if let age = model.poseInAVP.headPoseAge {
                 Text("Head pose age: \(String(format: "%.2f s", age))")
                     .font(.caption)
@@ -600,6 +630,28 @@ struct DebugDashboardView: View {
                 Text("FoundationPose: \(msg)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+        }
+        .padding()
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var processingSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Processing")
+                .font(.headline)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Process every \(model.processingStride) frame(s)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Slider(value: Binding(
+                    get: { Double(model.processingStride) },
+                    set: { model.processingStride = max(1, Int($0)) }
+                ), in: 1...10, step: 1)
+                .onChange(of: model.processingStride) { _, newValue in
+                    model.postProcessingStride(newValue)
+                }
             }
         }
         .padding()
@@ -634,6 +686,65 @@ struct DebugDashboardView: View {
                 FrameCard(title: "AVP Mask", state: model.avpMaskFrame)
                 FrameCard(title: "AVP + RS", state: model.avpRSOverlayFrame)
                 FrameCard(title: "Transformed Depth", state: model.transformedDepthFrame)
+            }
+        }
+        .padding()
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var hsvControlsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("HSV Filter Parameters")
+                .font(.headline)
+            VStack(spacing: 8) {
+                HStack(spacing: 16) {
+                    ColorPicker("Mean color", selection: $model.hsvMeanColor, supportsOpacity: false)
+                        .onChange(of: model.hsvMeanColor) { _, newValue in
+                            model.updateHSVFromColor(newValue)
+                        }
+                    Text("mean HSV: \(model.hsvMeanH), \(model.hsvMeanS), \(model.hsvMeanV)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                HStack(spacing: 16) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Std H: \(model.hsvStdH)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Slider(value: Binding(
+                            get: { Double(model.hsvStdH) },
+                            set: { model.hsvStdH = Int($0) }
+                        ), in: 0...90, step: 1)
+                    }
+                    .onChange(of: model.hsvStdH) { _, _ in
+                        model.updateHSVStd()
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Std S: \(model.hsvStdS)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Slider(value: Binding(
+                            get: { Double(model.hsvStdS) },
+                            set: { model.hsvStdS = Int($0) }
+                        ), in: 0...127, step: 1)
+                    }
+                    .onChange(of: model.hsvStdS) { _, _ in
+                        model.updateHSVStd()
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Std V: \(model.hsvStdV)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Slider(value: Binding(
+                            get: { Double(model.hsvStdV) },
+                            set: { model.hsvStdV = Int($0) }
+                        ), in: 0...127, step: 1)
+                    }
+                    .onChange(of: model.hsvStdV) { _, _ in
+                        model.updateHSVStd()
+                    }
+                }
             }
         }
         .padding()

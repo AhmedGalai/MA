@@ -141,6 +141,7 @@ struct ContentView: View {
                 Button("Anchor Setup") { openWindow(id: "anchor") }
                 Button("ROI Window") { openWindow(id: "roi") }
                 Button("Debug Viewer") { openWindow(id: "debug") }
+                Button("Help") { openWindow(id: "help") }
             }
         }
     }
