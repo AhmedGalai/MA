@@ -9,6 +9,7 @@ struct ContentView: View {
     @EnvironmentObject private var arucoStream: ArucoStreamModel
     @EnvironmentObject private var rsPoseModel: RealSensePoseModel
     @EnvironmentObject private var logs: LogStore
+    @EnvironmentObject private var arrowSettings: ArrowSettings
 
     @AppStorage("poseoverlay.apiHost") private var storedHost = "127.0.0.1"
     @AppStorage("poseoverlay.apiPort") private var storedPort = "8000"
@@ -26,6 +27,7 @@ struct ContentView: View {
 
             connectionControls
             modelSection
+            roiColorSection
             statusSection
             windowsSection
             Spacer(minLength: 0)
@@ -139,6 +141,14 @@ struct ContentView: View {
                 Button("ROI Window") { openWindow(id: "roi") }
                 Button("Debug Viewer") { openWindow(id: "debug") }
             }
+        }
+    }
+
+    private var roiColorSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("ROI Color")
+                .font(.headline)
+            ColorPicker("ROI disk", selection: $arrowSettings.roiColor, supportsOpacity: false)
         }
     }
 

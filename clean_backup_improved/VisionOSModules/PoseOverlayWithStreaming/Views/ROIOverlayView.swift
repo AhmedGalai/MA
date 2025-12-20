@@ -45,17 +45,12 @@ struct ROIWindowView: View {
     @EnvironmentObject private var logs: LogStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Place the circular ROI over the object")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-
+        ZStack {
+            Color.clear
             ROIOverlayView(roiRadius: $settings.roiRadius, color: $settings.roiColor)
-                .frame(minHeight: 240)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .padding()
+        .ignoresSafeArea()
     }
 }
 

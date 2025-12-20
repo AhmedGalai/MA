@@ -7,7 +7,11 @@ enabling aligned RGB and depth frame capture with intrinsic calibration data.
 
 import logging
 import numpy as np
-import pyrealsense2 as rs
+try:
+    import pyrealsense2 as rs
+except ModuleNotFoundError:
+    # Fallback for macOS builds provided by pyrealsense2-macosx.
+    import pyrealsense2_macosx as rs
 from config import CONFIG
 
 
@@ -56,6 +60,14 @@ class RealSenseClient:
             bool: True on successful startup, False on failure.
         """
         try:
+            # Fast-fail if no devices are connected.
+            ctx = rs.context()
+            devices = ctx.query_devices()
+            if devices.size() == 0:
+                logger.error("Failed to start RealSense pipeline: No device connected")
+                self.is_running = False
+                return False
+
             # Create pipeline and configuration objects
             self.pipeline = rs.pipeline()
             self.config = rs.config()
@@ -102,7 +114,7 @@ class RealSenseClient:
 
             for i in range(30):  # Skip first 30 frames (~1 second at 30fps)
                 try:
-                    self.pipeline.wait_for_frames()  # No timeout - waits until frames arrive
+                    self.pipeline.wait_for_frames(timeout_ms=1000)
                 except RuntimeError as e:
                     logger.error(f"Camera warm-up failed on frame {i+1}/30: {e}")
                     logger.error("This should not happen if camera is working correctly")
@@ -164,7 +176,7 @@ class RealSenseClient:
 
         try:
             # Wait for a coherent pair of frames (no timeout - blocks until ready)
-            frames = self.pipeline.wait_for_frames()
+            frames = self.pipeline.wait_for_frames(timeout_ms=1000)
 
             # Align depth to color frame
             aligned_frames = self.align.process(frames)

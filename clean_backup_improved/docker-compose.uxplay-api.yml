@@ -1,0 +1,47 @@
+version: "3.8"
+
+services:
+  uxplay_api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.uxplay_api
+    container_name: uxplay-api
+    restart: unless-stopped
+
+    # Linux: use host networking for mDNS/AirPlay discovery
+    # network_mode: host
+
+    # macOS: host networking is not supported in Docker Desktop
+    ports:
+      - "8000:8000"
+      - "7000:7000"
+      - "7001:7001"
+      - "6000:6000"
+      - "6001:6001"
+      - "5353:5353/udp"
+
+    environment:
+      - UXPLAY_DEVICE_NAME=AirPlay-Pipeline
+      - UXPLAY_WIDTH=1920
+      - UXPLAY_HEIGHT=1080
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - PROCESS_FPS=15.0
+      - ARUCO_DICT=DICT_4X4_250
+      - ARUCO_ROWS=3
+      - ARUCO_COLS=4
+      - ARUCO_MARKER_SIZE_M=0.03
+      - ARUCO_SEPARATION_M=0.01
+      - RS_WIDTH=640
+      - RS_HEIGHT=480
+      - RS_FPS=30
+
+    # Linux + RealSense: uncomment to pass USB devices into container
+    # privileged: true
+    # devices:
+    #   - /dev/bus/usb:/dev/bus/usb
+
+    volumes:
+      - ./models:/app/models:ro
+      - ./intrinsics.json:/app/intrinsics.json:ro
+      - ./extrinsics:/app/extrinsics:ro
