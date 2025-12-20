@@ -51,6 +51,7 @@ struct ROIWindowView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .ignoresSafeArea()
+        .background(Color.clear)
     }
 }
 
@@ -129,10 +130,16 @@ struct ROIOverlayView: View {
     // Visuals
     @ViewBuilder
     private func disk(center: CGPoint, radius: CGFloat, color: Color) -> some View {
-        Circle()
-            .fill(color.opacity(0.18))
-            .overlay(Circle().stroke(color.opacity(0.8), lineWidth: 1))
-            .frame(width: radius * 2, height: radius * 2)
-            .position(center)
+        ZStack {
+            Circle()
+                .fill(color.opacity(0.18))
+            Circle()
+                .stroke(color.opacity(0.8), lineWidth: 1)
+            Circle()
+                .stroke(color.opacity(0.5), lineWidth: 6)
+                .blur(radius: 10)
+        }
+        .frame(width: radius * 2, height: radius * 2)
+        .position(center)
     }
 }

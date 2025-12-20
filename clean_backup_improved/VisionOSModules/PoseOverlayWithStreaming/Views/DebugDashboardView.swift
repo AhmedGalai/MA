@@ -498,7 +498,6 @@ struct DebugDashboardView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     connectionStatus
                     matricesSection
-                    hsvControlsSection
                     framesSection
                     logsSection
                     sensorSection
@@ -582,64 +581,6 @@ struct DebugDashboardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
-    private var hsvControlsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("HSV Filter Parameters")
-                .font(.headline)
-            VStack(spacing: 8) {
-                HStack(spacing: 16) {
-                    ColorPicker("Mean color", selection: $model.hsvMeanColor, supportsOpacity: false)
-                        .onChange(of: model.hsvMeanColor) { _, newValue in
-                            model.updateHSVFromColor(newValue)
-                        }
-                    Text("mean HSV: \(model.hsvMeanH), \(model.hsvMeanS), \(model.hsvMeanV)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                HStack(spacing: 16) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Std H: \(model.hsvStdH)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Slider(value: Binding(
-                            get: { Double(model.hsvStdH) },
-                            set: { model.hsvStdH = Int($0) }
-                        ), in: 0...90, step: 1)
-                    }
-                    .onChange(of: model.hsvStdH) { _, _ in
-                        model.updateHSVStd()
-                    }
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Std S: \(model.hsvStdS)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Slider(value: Binding(
-                            get: { Double(model.hsvStdS) },
-                            set: { model.hsvStdS = Int($0) }
-                        ), in: 0...127, step: 1)
-                    }
-                    .onChange(of: model.hsvStdS) { _, _ in
-                        model.updateHSVStd()
-                    }
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Std V: \(model.hsvStdV)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Slider(value: Binding(
-                            get: { Double(model.hsvStdV) },
-                            set: { model.hsvStdV = Int($0) }
-                        ), in: 0...127, step: 1)
-                    }
-                    .onChange(of: model.hsvStdV) { _, _ in
-                        model.updateHSVStd()
-                    }
-                }
-            }
-        }
-        .padding()
-        .background(.thinMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-    }
 
     private var framesSection: some View {
         VStack(alignment: .leading, spacing: 12) {

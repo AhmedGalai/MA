@@ -13,7 +13,7 @@ import time
 
 import cv2
 import numpy as np
-from flask import Flask, jsonify
+from flask import Flask, Response
 
 from realsense_client import RealSenseClient
 
@@ -44,7 +44,7 @@ def main() -> None:
     def rgbd():
         frame = rs.capture()
         if frame is None:
-            return jsonify({"error": "No frame available"}), 503
+            return Response("No frame available", status=503)
         rgb = frame["rgb"]
         depth = frame["depth"]
         ts = frame.get("timestamp", time.time())
@@ -53,13 +53,36 @@ def main() -> None:
         depth_norm = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
         depth_color = cv2.applyColorMap(depth_norm, cv2.COLORMAP_JET)
         depth_b64 = encode_jpeg_b64(depth_color)
-        return jsonify(
-            {
-                "rgb": f"data:image/jpeg;base64,{rgb_b64}",
-                "depth": f"data:image/jpeg;base64,{depth_b64}",
-                "timestamp": ts,
-            }
-        )
+
+        html = f"""
+        <html>
+          <head>
+            <title>RealSense RGBD</title>
+            <style>
+              body {{ font-family: -apple-system, Arial, sans-serif; margin: 16px; }}
+              .row {{ display: flex; gap: 16px; flex-wrap: wrap; }}
+              .panel {{ max-width: 640px; }}
+              img {{ width: 100%; height: auto; border-radius: 8px; }}
+              .meta {{ color: #666; font-size: 12px; }}
+            </style>
+          </head>
+          <body>
+            <h2>RealSense RGBD</h2>
+            <div class="meta">timestamp: {ts:.3f}</div>
+            <div class="row">
+              <div class="panel">
+                <h3>RGB</h3>
+                <img src="data:image/jpeg;base64,{rgb_b64}" />
+              </div>
+              <div class="panel">
+                <h3>Depth</h3>
+                <img src="data:image/jpeg;base64,{depth_b64}" />
+              </div>
+            </div>
+          </body>
+        </html>
+        """
+        return Response(html, mimetype="text/html")
 
     try:
         app.run(host=args.host, port=args.port, debug=False, threaded=True)

@@ -149,6 +149,12 @@ struct ContentView: View {
             Text("ROI Color")
                 .font(.headline)
             ColorPicker("ROI disk", selection: $arrowSettings.roiColor, supportsOpacity: false)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("ROI Radius: \(Int(arrowSettings.roiRadius))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Slider(value: $arrowSettings.roiRadius, in: 40...420, step: 2)
+            }
         }
     }
 
