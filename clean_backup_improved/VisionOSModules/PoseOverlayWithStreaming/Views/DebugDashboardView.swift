@@ -111,90 +111,70 @@ final class DebugDashboardModel: ObservableObject {
 
     private func fetchOnce() async {
         guard let baseURL else { return }
+        var errors: [String] = []
+
+        async let healthTask = fetchHealth(baseURL: baseURL)
+        async let rgbdTask = fetchRGBD(baseURL: baseURL)
+        async let rsArucoTask = fetchRSAruco(baseURL: baseURL)
+        async let avpLatestTask = fetchAVPLatest(baseURL: baseURL)
+        async let avpArucoTask = fetchAVPAruco(baseURL: baseURL)
+        async let avpRSOverlayTask = fetchAVPRSOverlay(baseURL: baseURL)
+        async let avpMaskTask = fetchAVPMask(baseURL: baseURL)
+        async let transformedDepthTask = fetchTransformedDepth(baseURL: baseURL)
+        async let intrinsicsTask = fetchIntrinsics(baseURL: baseURL)
+        async let transformTask = fetchTransforms(baseURL: baseURL)
+        async let poseInAVPTask = fetchPoseInAVP(baseURL: baseURL)
+        async let hsvTask = fetchHSVConfig(baseURL: baseURL)
+
+        do { self.health = try await healthTask } catch { errors.append(error.localizedDescription) }
         do {
-            async let healthTask = fetchHealth(baseURL: baseURL)
-            async let rgbdTask = fetchRGBD(baseURL: baseURL)
-            async let rsArucoTask = fetchRSAruco(baseURL: baseURL)
-            async let avpLatestTask = fetchAVPLatest(baseURL: baseURL)
-            async let avpArucoTask = fetchAVPAruco(baseURL: baseURL)
-            async let avpRSOverlayTask = fetchAVPRSOverlay(baseURL: baseURL)
-            async let avpMaskTask = fetchAVPMask(baseURL: baseURL)
-            async let transformedDepthTask = fetchTransformedDepth(baseURL: baseURL)
-            async let intrinsicsTask = fetchIntrinsics(baseURL: baseURL)
-            async let transformTask = fetchTransforms(baseURL: baseURL)
-            async let poseInAVPTask = fetchPoseInAVP(baseURL: baseURL)
-            async let hsvTask = fetchHSVConfig(baseURL: baseURL)
-
-            let (health, rgbd, rsAruco, avp, avpAruco, avpRSOverlay, avpMask, transformedDepth, intrinsics, transforms, poseInAVP, hsvConfig) = try await (
-                healthTask,
-                rgbdTask,
-                rsArucoTask,
-                avpLatestTask,
-                avpArucoTask,
-                avpRSOverlayTask,
-                avpMaskTask,
-                transformedDepthTask,
-                intrinsicsTask,
-                transformTask,
-                poseInAVPTask,
-                hsvTask
-            )
-
-            self.health = health
+            let rgbd = try await rgbdTask
             self.rgbFrame = rgbd.rgb
             self.depthFrame = rgbd.depth
-            self.rsArucoFrame = rsAruco
-            self.avpFrame = avp
-            self.avpArucoFrame = avpAruco
-            self.avpRSOverlayFrame = avpRSOverlay
-            self.avpMaskFrame = avpMask
-            self.transformedDepthFrame = transformedDepth
-            self.intrinsics = intrinsics
-            self.transforms = transforms
-            self.poseInAVP = poseInAVP
-            applyHSVConfig(hsvConfig)
-            self.lastError = nil
-            self.avpLastFetchTime = Date()
-        } catch {
-            lastError = error.localizedDescription
-        }
+        } catch { errors.append(error.localizedDescription) }
+        do { self.rsArucoFrame = try await rsArucoTask } catch { errors.append(error.localizedDescription) }
+        do { self.avpFrame = try await avpLatestTask } catch { errors.append(error.localizedDescription) }
+        do { self.avpArucoFrame = try await avpArucoTask } catch { errors.append(error.localizedDescription) }
+        do { self.avpRSOverlayFrame = try await avpRSOverlayTask } catch { errors.append(error.localizedDescription) }
+        do { self.avpMaskFrame = try await avpMaskTask } catch { errors.append(error.localizedDescription) }
+        do { self.transformedDepthFrame = try await transformedDepthTask } catch { errors.append(error.localizedDescription) }
+        do { self.intrinsics = try await intrinsicsTask } catch { errors.append(error.localizedDescription) }
+        do { self.transforms = try await transformTask } catch { errors.append(error.localizedDescription) }
+        do { self.poseInAVP = try await poseInAVPTask } catch { errors.append(error.localizedDescription) }
+        do { applyHSVConfig(try await hsvTask) } catch { errors.append(error.localizedDescription) }
+
+        self.lastError = errors.isEmpty ? nil : errors.joined(separator: " | ")
+        self.avpLastFetchTime = Date()
         lastUpdate = Date()
     }
 
     private func fetchAVPData() async {
         guard let baseURL else { return }
+        var errors: [String] = []
+
+        async let avpLatestTask = fetchAVPLatest(baseURL: baseURL)
+        async let avpArucoTask = fetchAVPAruco(baseURL: baseURL)
+        async let transformedDepthTask = fetchTransformedDepth(baseURL: baseURL)
+        async let avpRSOverlayTask = fetchAVPRSOverlay(baseURL: baseURL)
+        async let avpMaskTask = fetchAVPMask(baseURL: baseURL)
+        async let hsvTask = fetchHSVConfig(baseURL: baseURL)
+
+        do { self.avpFrame = try await avpLatestTask } catch { errors.append(error.localizedDescription) }
         do {
-            async let avpLatestTask = fetchAVPLatest(baseURL: baseURL)
-            async let avpArucoTask = fetchAVPAruco(baseURL: baseURL)
-            async let transformedDepthTask = fetchTransformedDepth(baseURL: baseURL)
-            async let avpRSOverlayTask = fetchAVPRSOverlay(baseURL: baseURL)
-            async let avpMaskTask = fetchAVPMask(baseURL: baseURL)
-            async let hsvTask = fetchHSVConfig(baseURL: baseURL)
-
-            let (avp, avpAruco, transformedDepth, avpRSOverlay, avpMask, hsvConfig) = try await (
-                avpLatestTask,
-                avpArucoTask,
-                transformedDepthTask,
-                avpRSOverlayTask,
-                avpMaskTask,
-                hsvTask
-            )
-
-            self.avpFrame = avp
+            let avpAruco = try await avpArucoTask
             self.avpArucoFrame = avpAruco
-            self.transformedDepthFrame = transformedDepth
-            self.avpRSOverlayFrame = avpRSOverlay
-            self.avpMaskFrame = avpMask
-            applyHSVConfig(hsvConfig)
             var t = self.transforms
             t.avpBoard = avpAruco.poseMatrix
             self.transforms = t
             self.avpBoardPose = avpAruco.poseMatrix
-            self.avpLastFetchTime = Date()
-            self.lastError = nil
-        } catch {
-            lastError = error.localizedDescription
-        }
+        } catch { errors.append(error.localizedDescription) }
+        do { self.transformedDepthFrame = try await transformedDepthTask } catch { errors.append(error.localizedDescription) }
+        do { self.avpRSOverlayFrame = try await avpRSOverlayTask } catch { errors.append(error.localizedDescription) }
+        do { self.avpMaskFrame = try await avpMaskTask } catch { errors.append(error.localizedDescription) }
+        do { applyHSVConfig(try await hsvTask) } catch { errors.append(error.localizedDescription) }
+
+        self.avpLastFetchTime = Date()
+        self.lastError = errors.isEmpty ? nil : errors.joined(separator: " | ")
     }
 }
 
