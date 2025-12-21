@@ -52,4 +52,6 @@ if [[ -n "${UXPLAY_BINARY}" ]]; then
   ARGS+=(--uxplay-binary "${UXPLAY_BINARY}")
 fi
 
-exec python3 /app/basic_main_api_with_uxplay_rs.py "${ARGS[@]}"
+#exec python3 /app/basic_main_api_with_uxplay_rs.py "${ARGS[@]}"
+exec python3 /app/avp_foundationpose_pipeline.py "${ARGS[@]}"
+#exec python3 /app/rs_foundationpose_pipeline.py "${ARGS[@]}"
