@@ -39,16 +39,9 @@ def _encode_image_base64(img: np.ndarray, format: str = '.jpg') -> str:
             logger.error(f"Failed to encode image with format {format}")
             return ""
 
-        img_base64 = base64.b64encode(encoded.tobytes()).decode('utf-8')
-
-        if format.lower() == '.jpg':
-            mime_type = "image/jpeg"
-        elif format.lower() == '.png':
-            mime_type = "image/png"
-        else:
-            mime_type = "image/jpeg"
-
-        return f"data:{mime_type};base64,{img_base64}"
+        # Encode directly without .tobytes() and without data URI prefix
+        img_base64 = base64.b64encode(encoded).decode('utf-8')
+        return img_base64
 
     except Exception as e:
         logger.error(f"Error encoding image: {e}")
@@ -92,14 +85,14 @@ def _encode_depth_as_png(depth: np.ndarray) -> str:
                 (disparity - disparity_min) / (disparity_max - disparity_min) * 255
             ).astype(np.uint8)
 
-        # Encode as PNG
+        # Encode as PNG without .tobytes() and without data URI prefix
         success, encoded = cv2.imencode('.png', disparity_normalized)
         if not success:
             logger.error("Failed to encode depth as PNG")
             return ""
 
-        img_base64 = base64.b64encode(encoded.tobytes()).decode('utf-8')
-        return f"data:image/png;base64,{img_base64}"
+        img_base64 = base64.b64encode(encoded).decode('utf-8')
+        return img_base64
 
     except Exception as e:
         logger.error(f"Error encoding depth: {e}")
@@ -124,8 +117,9 @@ def _encode_mesh_base64(mesh_path: str) -> str:
         with open(mesh_path, 'rb') as f:
             mesh_data = f.read()
 
+        # Encode without data URI prefix
         mesh_base64 = base64.b64encode(mesh_data).decode('utf-8')
-        return f"data:application/octet-stream;base64,{mesh_base64}"
+        return mesh_base64
 
     except Exception as e:
         logger.error(f"Error encoding mesh file: {e}")
@@ -260,6 +254,10 @@ def estimate_pose(
         except (ValueError, TypeError) as e:
             logger.error(f"Failed to convert transformation_matrix to array: {e}")
             return None
+
+        # Handle batch dimension if present (squeeze from (1, 4, 4) to (4, 4))
+        if T.shape == (1, 4, 4):
+            T = T.squeeze(0)
 
         # Validate shape
         if T.shape != (4, 4):

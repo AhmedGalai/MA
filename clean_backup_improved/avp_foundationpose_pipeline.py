@@ -113,21 +113,6 @@ foundationpose_save_next = False
 processing_stride_lock = threading.Lock()
 processing_stride = 1
 
-rs_roi_lock = threading.Lock()
-rs_roi_config = {
-    "x_center": CONFIG["realsense"]["resolution_width"] // 2,
-    "y_center": CONFIG["realsense"]["resolution_height"] // 2,
-    "radius": 120,
-}
-
-foundationpose_rs_lock = threading.Lock()
-foundationpose_rs_latest = {
-    "pose_matrix": None,
-    "timestamp": None,
-    "message": "FoundationPose RS not started",
-    "success": False,
-}
-
 # -----------------------------
 # ArUco config (edit as needed)
 # -----------------------------
@@ -951,35 +936,6 @@ def _save_foundationpose_request(
         logger.warning("Failed to save FoundationPose request: %s", e)
 
 
-def _save_foundationpose_rs_request(
-    rgb: np.ndarray,
-    depth: np.ndarray,
-    mask: np.ndarray,
-    pose: Optional[np.ndarray],
-    meta: Dict[str, Any],
-) -> None:
-    try:
-        base_dir = os.path.join(CONFIG["uxplay"]["frame_dir"], "foundationpose_rs")
-        os.makedirs(base_dir, exist_ok=True)
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        prefix = os.path.join(base_dir, f"fp_rs_{ts}")
-
-        cv2.imwrite(prefix + "_rgb.jpg", rgb)
-        cv2.imwrite(prefix + "_mask.png", mask)
-        np.save(prefix + "_depth.npy", depth.astype(np.float32))
-        depth_norm = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
-        cv2.imwrite(prefix + "_depth.png", depth_norm)
-
-        if pose is not None:
-            np.save(prefix + "_pose.npy", pose.astype(np.float32))
-        meta_path = prefix + "_meta.json"
-        with open(meta_path, "w") as f:
-            json.dump(meta, f, indent=2)
-        logger.info("Saved FoundationPose RS request to %s", base_dir)
-    except Exception as e:
-        logger.warning("Failed to save FoundationPose RS request: %s", e)
-
-
 def _start_foundationpose_worker(capture: UxPlayCapture, processor: "ArucoProcessor") -> threading.Thread:
     def loop():
         frame_index = 0
@@ -1106,102 +1062,6 @@ def _start_foundationpose_worker(capture: UxPlayCapture, processor: "ArucoProces
     return t
 
 
-def _start_foundationpose_rs_worker() -> threading.Thread:
-    def loop():
-        frame_index = 0
-        while True:
-            if rs_capture is None:
-                with foundationpose_rs_lock:
-                    foundationpose_rs_latest.update(
-                        {"pose_matrix": None, "timestamp": None, "message": "RealSense not connected", "success": False}
-                    )
-                time.sleep(0.5)
-                continue
-
-            latest = rs_capture.get_latest()
-            rgb_bgr = latest.get("rgb")
-            depth = latest.get("depth")
-            K = latest.get("K")
-            ts = latest.get("timestamp") or time.time()
-            if rgb_bgr is None or depth is None or K is None:
-                with foundationpose_rs_lock:
-                    foundationpose_rs_latest.update(
-                        {"pose_matrix": None, "timestamp": ts, "message": "Missing RS frame", "success": False}
-                    )
-                time.sleep(0.2)
-                continue
-
-            frame_index += 1
-            stride = _get_processing_stride()
-            if stride > 1 and (frame_index % stride) != 0:
-                time.sleep(0.2)
-                continue
-
-            with rs_roi_lock:
-                cx = int(rs_roi_config["x_center"])
-                cy = int(rs_roi_config["y_center"])
-                radius = int(rs_roi_config["radius"])
-
-            mask = np.zeros(rgb_bgr.shape[:2], dtype=np.uint8)
-            cv2.circle(mask, (cx, cy), radius, 255, -1)
-
-            model_name = _get_selected_model()
-            mesh_path = model_name
-            if not os.path.isabs(mesh_path):
-                mesh_path = os.path.join(CONFIG["paths"]["models_dir"], mesh_path)
-            if not os.path.exists(mesh_path):
-                with foundationpose_rs_lock:
-                    foundationpose_rs_latest.update(
-                        {"pose_matrix": None, "timestamp": ts, "message": f"Missing mesh: {model_name}", "success": False}
-                    )
-                time.sleep(1.0)
-                continue
-
-            rgb = cv2.cvtColor(rgb_bgr, cv2.COLOR_BGR2RGB)
-            pose = estimate_pose(
-                rgb=rgb,
-                depth=depth,
-                mask=mask,
-                K=K,
-                mesh_path=mesh_path,
-                api_url=CONFIG["network"]["foundationpose_url"],
-            )
-
-            if _consume_save_next_foundationpose():
-                _save_foundationpose_rs_request(
-                    rgb=rgb,
-                    depth=depth,
-                    mask=mask,
-                    pose=pose,
-                    meta={
-                        "timestamp": ts,
-                        "model": model_name,
-                        "foundationpose_url": CONFIG["network"]["foundationpose_url"],
-                        "roi": {"x_center": cx, "y_center": cy, "radius": radius},
-                    },
-                )
-
-            if pose is None:
-                with foundationpose_rs_lock:
-                    foundationpose_rs_latest.update(
-                        {"pose_matrix": None, "timestamp": ts, "message": "FoundationPose returned no pose", "success": False}
-                    )
-                logger.warning("FoundationPose RS returned no pose")
-                time.sleep(1.0)
-                continue
-
-            with foundationpose_rs_lock:
-                foundationpose_rs_latest.update(
-                    {"pose_matrix": pose, "timestamp": ts, "message": "ok", "success": True}
-                )
-
-            time.sleep(0.8)
-
-    t = threading.Thread(target=loop, daemon=True)
-    t.start()
-    return t
-
-
 # -----------------------------
 # Flask API
 # -----------------------------
@@ -1249,22 +1109,6 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
         with foundationpose_save_lock:
             foundationpose_save_next = enabled
         return jsonify({"enabled": foundationpose_save_next}), 200
-
-    @app.route("/rs_roi_config", methods=["GET", "POST"])
-    def rs_roi_config_route():
-        if request.method == "GET":
-            with rs_roi_lock:
-                return jsonify(dict(rs_roi_config)), 200
-
-        data = request.get_json(silent=True) or {}
-        with rs_roi_lock:
-            if "x_center" in data:
-                rs_roi_config["x_center"] = int(data["x_center"])
-            if "y_center" in data:
-                rs_roi_config["y_center"] = int(data["y_center"])
-            if "radius" in data:
-                rs_roi_config["radius"] = int(data["radius"])
-        return jsonify(dict(rs_roi_config)), 200
 
     @app.route("/processing_stride", methods=["GET", "POST"])
     def processing_stride_route():
@@ -1597,22 +1441,6 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
             }
         ), 200
 
-    @app.route("/get_foundationpose_rs_pose", methods=["GET"])
-    def get_foundationpose_rs_pose():
-        with foundationpose_rs_lock:
-            pose = foundationpose_rs_latest.get("pose_matrix")
-            ts = foundationpose_rs_latest.get("timestamp")
-            msg = foundationpose_rs_latest.get("message")
-            ok = foundationpose_rs_latest.get("success")
-        return jsonify(
-            {
-                "pose_matrix": None if pose is None else pose.tolist(),
-                "timestamp": ts,
-                "success": bool(ok),
-                "message": msg,
-            }
-        ), 200
-
     @app.route("/head_pose", methods=["POST"])
     def head_pose():
         data = request.get_json(force=True, silent=True) or {}
@@ -1723,25 +1551,19 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
 
     @app.route("/debug", methods=["GET"])
     def debug_page():
-        rs_w = CONFIG["realsense"]["resolution_width"]
-        rs_h = CONFIG["realsense"]["resolution_height"]
-        html = f"""
+        html = r"""
 <!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
   <title>Debug Views</title>
   <style>
-    body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 14px; }}
-    .grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }}
-    .panel {{ border: 1px solid #ddd; border-radius: 8px; overflow: hidden; }}
-    .hdr {{ padding: 8px 10px; background: #f7f7f7; border-bottom: 1px solid #eee; font-weight: 600; }}
-    img {{ width: 100%; display: block; background: #000; }}
-    .controls {{ margin-top: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 8px; }}
-    .row {{ display: flex; align-items: center; gap: 10px; margin: 8px 0; }}
-    .row label {{ width: 140px; }}
-    input[type="range"] {{ width: 320px; }}
-    .mono {{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }}
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 14px; }
+    .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    .panel { border: 1px solid #ddd; border-radius: 8px; overflow: hidden; }
+    .hdr { padding: 8px 10px; background: #f7f7f7; border-bottom: 1px solid #eee; font-weight: 600; }
+    img { width: 100%; display: block; background: #000; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
   </style>
 </head>
 <body>
@@ -1773,10 +1595,6 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
       <img id="rsaruco" src="/mjpeg?view=rs_aruco" />
     </div>
     <div class="panel">
-      <div class="hdr">RS ROI</div>
-      <img id="rsroi" src="/mjpeg?view=rs_roi" />
-    </div>
-    <div class="panel">
       <div class="hdr">AVP + RS Pose Overlay</div>
       <img id="avprs" src="/mjpeg?view=avp_rs" />
     </div>
@@ -1785,91 +1603,6 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
       <img id="rsdepthavp" src="/mjpeg?view=avp_depth" />
     </div>
   </div>
-
-  <div class="controls">
-    <div class="row">
-      <label>ROI X Center</label>
-      <input id="roiX" type="range" min="0" max="{rs_w}" value="{rs_w // 2}" />
-      <span class="mono" id="roiXOut"></span>
-    </div>
-    <div class="row">
-      <label>ROI Y Center</label>
-      <input id="roiY" type="range" min="0" max="{rs_h}" value="{rs_h // 2}" />
-      <span class="mono" id="roiYOut"></span>
-    </div>
-    <div class="row">
-      <label>ROI Radius</label>
-      <input id="roiR" type="range" min="10" max="{max(rs_w, rs_h) // 2}" value="120" />
-      <span class="mono" id="roiROut"></span>
-    </div>
-    <div class="row">
-      <label>Save next request</label>
-      <button id="saveNext">Save next request</button>
-      <span class="mono" id="saveState"></span>
-    </div>
-  </div>
-
-<script>
-async function postROI(payload) {{
-  await fetch("/rs_roi_config", {{
-    method: "POST",
-    headers: {{"Content-Type":"application/json"}},
-    body: JSON.stringify(payload)
-  }});
-}}
-
-async function postSave(enabled) {{
-  await fetch("/foundationpose_save_next", {{
-    method: "POST",
-    headers: {{"Content-Type":"application/json"}},
-    body: JSON.stringify({{enabled}})
-  }});
-}}
-
-async function loadROI() {{
-  const r = await fetch("/rs_roi_config");
-  const j = await r.json();
-  return j;
-}}
-
-async function wire() {{
-  const roiX = document.getElementById("roiX");
-  const roiY = document.getElementById("roiY");
-  const roiR = document.getElementById("roiR");
-  const roiXOut = document.getElementById("roiXOut");
-  const roiYOut = document.getElementById("roiYOut");
-  const roiROut = document.getElementById("roiROut");
-  const saveBtn = document.getElementById("saveNext");
-  const saveState = document.getElementById("saveState");
-
-  const cfg = await loadROI();
-  roiX.value = cfg.x_center;
-  roiY.value = cfg.y_center;
-  roiR.value = cfg.radius;
-  roiXOut.textContent = cfg.x_center;
-  roiYOut.textContent = cfg.y_center;
-  roiROut.textContent = cfg.radius;
-
-  function updateROI() {{
-    roiXOut.textContent = roiX.value;
-    roiYOut.textContent = roiY.value;
-    roiROut.textContent = roiR.value;
-    postROI({{x_center: roiX.value, y_center: roiY.value, radius: roiR.value}});
-  }}
-
-  roiX.addEventListener("input", updateROI);
-  roiY.addEventListener("input", updateROI);
-  roiR.addEventListener("input", updateROI);
-
-  saveBtn.addEventListener("click", async () => {{
-    await postSave(true);
-    saveState.textContent = "armed";
-    setTimeout(() => {{ saveState.textContent = ""; }}, 2000);
-  }});
-}}
-
-wire();
-</script>
 
 </body>
 </html>
@@ -1886,12 +1619,11 @@ wire();
           /mjpeg?view=rs_rgb    -> RealSense RGB
           /mjpeg?view=rs_depth  -> RealSense depth colormap
           /mjpeg?view=rs_aruco  -> RealSense ArUco overlay
-          /mjpeg?view=rs_roi    -> RealSense RGB with ROI + FoundationPose overlay
           /mjpeg?view=avp_rs    -> AVP view with RS pose overlay
           /mjpeg?view=avp_depth -> RS depth transformed to AVP view
         """
         view = (request.args.get("view", "overlay") or "overlay").lower().strip()
-        if view not in ("raw", "overlay", "mask", "rs_rgb", "rs_depth", "rs_aruco", "rs_roi", "avp_rs", "avp_depth"):
+        if view not in ("raw", "overlay", "mask", "rs_rgb", "rs_depth", "rs_aruco", "avp_rs", "avp_depth"):
             view = "overlay"
 
         K = processor.K.copy()
@@ -1963,29 +1695,6 @@ wire();
                         time.sleep(0.02)
                         continue
                     out = overlay.copy()
-
-                elif view == "rs_roi":
-                    if rs_capture is None:
-                        time.sleep(0.05)
-                        continue
-                    latest = rs_capture.get_latest()
-                    out = latest.get("rgb")
-                    K_rs = latest.get("K")
-                    if out is None or K_rs is None:
-                        time.sleep(0.02)
-                        continue
-                    out = out.copy()
-                    with rs_roi_lock:
-                        cx = int(rs_roi_config["x_center"])
-                        cy = int(rs_roi_config["y_center"])
-                        radius = int(rs_roi_config["radius"])
-                    cv2.circle(out, (cx, cy), radius, (0, 255, 255), 2)
-                    with foundationpose_rs_lock:
-                        fp_rs = foundationpose_rs_latest.get("pose_matrix")
-                    if fp_rs is not None:
-                        rvec, tvec = _T_to_rvec_tvec(fp_rs)
-                        out = _draw_axes(out, rvec, tvec, K_rs, np.zeros((5, 1), dtype=np.float32),
-                                         processor.cfg.axis_length_m, label="foundationpose")
 
                 elif view == "avp_rs":
                     if out is None:
@@ -2143,7 +1852,6 @@ def main():
     )
     processor.start()
     _start_foundationpose_worker(capture, processor)
-    _start_foundationpose_rs_worker()
 
     app = create_app(capture, processor)
 

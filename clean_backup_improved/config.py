@@ -19,7 +19,8 @@ CONFIG = {
         "main_api_port": int(os.getenv("MAIN_API_PORT", "8000")),
         "foundationpose_url": os.getenv(
             "FOUNDATIONPOSE_URL",
-            "http://localhost:5000/foundationpose"
+            #"http://10.145.8.86:5000/foundationpose",
+            "http://localhost:5000/foundationpose",
         ),
     },
 
