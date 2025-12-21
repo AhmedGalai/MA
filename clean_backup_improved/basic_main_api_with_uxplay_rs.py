@@ -1207,6 +1207,8 @@ def _start_foundationpose_rs_worker() -> threading.Thread:
 # -----------------------------
 def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
     app = Flask(__name__)
+    # MJPEG throttle to prevent browser overload
+    MJPEG_FPS = 10
     CORS(app)
 
     @app.route("/health", methods=["GET"])
@@ -1747,43 +1749,23 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
 <body>
   <h2 style="margin: 0 0 10px 0;">Debug Views</h2>
 
-  <div class="grid">
-    <div class="panel">
-      <div class="hdr">AVP Raw (UxPlay)</div>
-      <img id="raw" src="/mjpeg?view=raw" />
+  <div class="panel" style="margin-bottom: 12px;">
+    <div class="hdr">Live View</div>
+    <div style="padding: 10px; background: #fff;">
+      <label for="viewSelect" style="font-weight: 600; margin-right: 8px;">View:</label>
+      <select id="viewSelect">
+        <option value="overlay">AVP ArUco Overlay</option>
+        <option value="raw">AVP Raw (UxPlay)</option>
+        <option value="mask">AVP Mask (HSV)</option>
+        <option value="rs_rgb">RS RGB</option>
+        <option value="rs_depth">RS Depth</option>
+        <option value="rs_aruco">RS ArUco Overlay</option>
+        <option value="rs_roi">RS ROI</option>
+        <option value="avp_rs">AVP + RS Pose Overlay</option>
+        <option value="avp_depth">RS Depth → AVP</option>
+      </select>
     </div>
-    <div class="panel">
-      <div class="hdr">AVP ArUco Overlay</div>
-      <img id="overlay" src="/mjpeg?view=overlay" />
-    </div>
-    <div class="panel">
-      <div class="hdr">AVP Mask (HSV)</div>
-      <img id="mask" src="/mjpeg?view=mask" />
-    </div>
-    <div class="panel">
-      <div class="hdr">RS RGB</div>
-      <img id="rsrgb" src="/mjpeg?view=rs_rgb" />
-    </div>
-    <div class="panel">
-      <div class="hdr">RS Depth</div>
-      <img id="rsdepth" src="/mjpeg?view=rs_depth" />
-    </div>
-    <div class="panel">
-      <div class="hdr">RS ArUco Overlay</div>
-      <img id="rsaruco" src="/mjpeg?view=rs_aruco" />
-    </div>
-    <div class="panel">
-      <div class="hdr">RS ROI</div>
-      <img id="rsroi" src="/mjpeg?view=rs_roi" />
-    </div>
-    <div class="panel">
-      <div class="hdr">AVP + RS Pose Overlay</div>
-      <img id="avprs" src="/mjpeg?view=avp_rs" />
-    </div>
-    <div class="panel">
-      <div class="hdr">RS Depth → AVP</div>
-      <img id="rsdepthavp" src="/mjpeg?view=avp_depth" />
-    </div>
+    <img id="viewImg" src="/mjpeg?view=overlay" />
   </div>
 
   <div class="controls">
@@ -1833,6 +1815,8 @@ async function loadROI() {{
 }}
 
 async function wire() {{
+  const viewSelect = document.getElementById("viewSelect");
+  const viewImg = document.getElementById("viewImg");
   const roiX = document.getElementById("roiX");
   const roiY = document.getElementById("roiY");
   const roiR = document.getElementById("roiR");
@@ -1841,6 +1825,11 @@ async function wire() {{
   const roiROut = document.getElementById("roiROut");
   const saveBtn = document.getElementById("saveNext");
   const saveState = document.getElementById("saveState");
+
+  viewSelect.addEventListener("change", () => {{
+    const view = encodeURIComponent(viewSelect.value);
+    viewImg.src = `/mjpeg?view=${{view}}&_ts=${{Date.now()}}`;
+  }});
 
   const cfg = await loadROI();
   roiX.value = cfg.x_center;
@@ -1893,6 +1882,7 @@ wire();
         view = (request.args.get("view", "overlay") or "overlay").lower().strip()
         if view not in ("raw", "overlay", "mask", "rs_rgb", "rs_depth", "rs_aruco", "rs_roi", "avp_rs", "avp_depth"):
             view = "overlay"
+        frame_interval = 1.0 / MJPEG_FPS
 
         K = processor.K.copy()
         dist = processor.dist.copy()
@@ -2040,7 +2030,7 @@ wire();
                     b"Content-Type: image/jpeg\r\n"
                     b"Content-Length: " + str(len(jpg)).encode() + b"\r\n\r\n" + jpg + b"\r\n"
                 )
-                time.sleep(0.03)
+                time.sleep(frame_interval)
 
         return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
 

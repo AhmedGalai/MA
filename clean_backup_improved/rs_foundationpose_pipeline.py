@@ -30,6 +30,9 @@ logger = logging.getLogger(__name__)
 # Flask app
 app = Flask(__name__)
 
+# MJPEG throttle to prevent browser overload
+MJPEG_FPS = 10
+
 # Global state
 rs_client: Optional[RealSenseClient] = None
 rs_lock = threading.Lock()
@@ -58,12 +61,15 @@ fp_lock = threading.Lock()
 fp_result = {
     "pose_matrix": None,
     "timestamp": None,
-    "error": None
+    "error": None,
+    "last_request_id": None,
+    "inflight": False
 }
 
-# Save next request flag
-save_lock = threading.Lock()
-save_next = False
+# Pose request queue
+request_lock = threading.Lock()
+request_event = threading.Event()
+pending_request: Optional[Dict[str, Any]] = None
 
 
 def scan_models():
@@ -87,10 +93,12 @@ def rs_capture_thread():
     while True:
         try:
             if rs_client and rs_client.is_running:
-                frame_data = rs_client.capture()
+                frame_data = rs_client.poll()
                 if frame_data:
                     with rs_lock:
                         latest_frame = frame_data
+                else:
+                    time.sleep(0.005)
             else:
                 time.sleep(0.1)
         except Exception as e:
@@ -100,7 +108,7 @@ def rs_capture_thread():
 
 def foundationpose_worker():
     """Background worker to process FoundationPose requests"""
-    global fp_result, save_next
+    global fp_result, pending_request
 
     logger.info("FoundationPose worker started")
     consecutive_errors = 0
@@ -108,7 +116,7 @@ def foundationpose_worker():
 
     while True:
         try:
-            time.sleep(0.5)  # Process at ~2 Hz
+            request_event.wait()
 
             # Back off if too many consecutive errors
             if consecutive_errors >= max_consecutive_errors:
@@ -116,54 +124,29 @@ def foundationpose_worker():
                 time.sleep(10)
                 consecutive_errors = 0
 
-            # Get latest frame (quick lock)
-            with rs_lock:
-                rgb = latest_frame.get("rgb")
-                depth = latest_frame.get("depth")
-                K = latest_frame.get("K")
+            with request_lock:
+                request_data = pending_request
+                pending_request = None
+                request_event.clear()
 
-            if rgb is None or depth is None or K is None:
-                time.sleep(0.1)
+            if not request_data:
                 continue
 
-            # Get ROI config (quick lock)
-            with roi_lock:
-                cx = int(roi_config["x_center"])
-                cy = int(roi_config["y_center"])
-                radius = int(roi_config["radius"])
+            rgb = request_data["rgb"]
+            depth = request_data["depth"]
+            K = request_data["K"]
+            mask = request_data["mask"]
+            model_path = request_data["model_path"]
+            request_id = request_data["request_id"]
 
-            # Create circular mask (no lock needed)
-            mask = np.zeros(rgb.shape[:2], dtype=np.uint8)
-            cv2.circle(mask, (cx, cy), radius, 255, -1)
-
-            # Get selected model (quick lock)
-            with model_lock:
-                model_name = selected_model
-
-            model_path = Path(CONFIG["paths"]["models_dir"]) / model_name
-            if not model_path.exists():
-                logger.warning(f"Model not found: {model_path}")
-                time.sleep(1)
-                continue
-
-            # Check if we should save this request (quick lock)
-            should_save = False
-            with save_lock:
-                if save_next:
-                    should_save = True
-                    save_next = False
-
-            # Save request data if requested (no lock needed)
-            if should_save:
-                try:
-                    save_request_data(rgb, depth, mask, K, str(model_path))
-                except Exception as e:
-                    logger.error(f"Failed to save request: {e}")
+            with fp_lock:
+                fp_result["inflight"] = True
+                fp_result["last_request_id"] = request_id
 
             # Call FoundationPose API (BLOCKING - no locks held)
             try:
                 api_url = CONFIG["network"]["foundationpose_url"]
-                pose_matrix = estimate_pose(rgb, depth, mask, K, str(model_path), api_url)
+                pose_matrix = estimate_pose(rgb, depth, mask, K, model_path, api_url)
 
                 # Update result (quick lock)
                 with fp_lock:
@@ -171,55 +154,91 @@ def foundationpose_worker():
                         fp_result["pose_matrix"] = pose_matrix
                         fp_result["timestamp"] = time.time()
                         fp_result["error"] = None
+                        fp_result["inflight"] = False
                         logger.info("FoundationPose: Success")
                         consecutive_errors = 0  # Reset
                     else:
                         fp_result["error"] = "Estimation failed"
+                        fp_result["inflight"] = False
                         logger.warning("FoundationPose: Failed")
                         consecutive_errors += 1
+
+                try:
+                    save_request_data(
+                        request_id,
+                        rgb,
+                        depth,
+                        mask,
+                        K,
+                        model_path,
+                        request_data["roi"],
+                        pose_matrix=pose_matrix,
+                        error=None if pose_matrix is not None else "Estimation failed"
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to save request: {e}")
 
             except Exception as api_error:
                 logger.error(f"FoundationPose API error: {api_error}")
                 with fp_lock:
                     fp_result["error"] = str(api_error)
+                    fp_result["inflight"] = False
                 consecutive_errors += 1
                 time.sleep(2)  # Back off on API errors
+                try:
+                    save_request_data(
+                        request_id,
+                        rgb,
+                        depth,
+                        mask,
+                        K,
+                        model_path,
+                        request_data["roi"],
+                        pose_matrix=None,
+                        error=str(api_error)
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to save request: {e}")
 
         except Exception as e:
             logger.error(f"Error in FoundationPose worker: {e}", exc_info=True)
             with fp_lock:
                 fp_result["error"] = str(e)
+                fp_result["inflight"] = False
             consecutive_errors += 1
             time.sleep(1)
 
 
-def save_request_data(rgb, depth, mask, K, model_path):
+def save_request_data(request_id, rgb, depth, mask, K, model_path, roi, pose_matrix=None, error=None):
     """Save the request data for debugging"""
     try:
         output_dir = Path("fp_requests")
         output_dir.mkdir(exist_ok=True)
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        request_dir = output_dir / request_id
+        request_dir.mkdir(exist_ok=True)
 
         # Save images
-        cv2.imwrite(str(output_dir / f"{timestamp}_rgb.png"), rgb)
-        cv2.imwrite(str(output_dir / f"{timestamp}_mask.png"), mask)
+        cv2.imwrite(str(request_dir / "rgb.png"), rgb)
+        cv2.imwrite(str(request_dir / "mask.png"), mask)
 
         # Save depth as 16-bit PNG
         depth_mm = (depth * 1000).astype(np.uint16)
-        cv2.imwrite(str(output_dir / f"{timestamp}_depth.png"), depth_mm)
+        cv2.imwrite(str(request_dir / "depth.png"), depth_mm)
 
         # Save metadata
         metadata = {
-            "timestamp": timestamp,
+            "timestamp": request_id,
             "K": K.tolist(),
             "model_path": model_path,
-            "roi": dict(roi_config)
+            "roi": dict(roi),
+            "pose_matrix": pose_matrix.tolist() if pose_matrix is not None else None,
+            "error": error
         }
-        with open(output_dir / f"{timestamp}_metadata.json", 'w') as f:
+        with open(request_dir / "metadata.json", 'w') as f:
             json.dump(metadata, f, indent=2)
 
-        logger.info(f"Saved request data to {output_dir}/{timestamp}_*")
+        logger.info(f"Saved request data to {request_dir}")
     except Exception as e:
         logger.error(f"Failed to save request data: {e}")
 
@@ -317,15 +336,52 @@ def model_route():
     return jsonify({"error": "Invalid model"}), 400
 
 
-@app.route("/save_next", methods=["POST"])
-def save_next_route():
-    """Enable saving of next FoundationPose request"""
-    global save_next
+@app.route("/request_pose", methods=["POST"])
+def request_pose_route():
+    """Queue a FoundationPose request based on the latest frame"""
+    global pending_request
 
-    with save_lock:
-        save_next = True
+    with rs_lock:
+        rgb = latest_frame.get("rgb")
+        depth = latest_frame.get("depth")
+        K = latest_frame.get("K")
 
-    return jsonify({"status": "next request will be saved"})
+    if rgb is None or depth is None or K is None:
+        return jsonify({"error": "No frame available"}), 400
+
+    with roi_lock:
+        cx = int(roi_config["x_center"])
+        cy = int(roi_config["y_center"])
+        radius = int(roi_config["radius"])
+        roi_snapshot = dict(roi_config)
+
+    mask = np.zeros(rgb.shape[:2], dtype=np.uint8)
+    cv2.circle(mask, (cx, cy), radius, 255, -1)
+
+    with model_lock:
+        model_name = selected_model
+
+    model_path = str(Path(CONFIG["paths"]["models_dir"]) / model_name)
+    if not Path(model_path).exists():
+        return jsonify({"error": "Model not found"}), 400
+
+    request_id = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+
+    with request_lock:
+        if pending_request is not None:
+            return jsonify({"error": "Request already pending"}), 409
+        pending_request = {
+            "request_id": request_id,
+            "rgb": rgb.copy(),
+            "depth": depth.copy(),
+            "K": K.copy(),
+            "mask": mask,
+            "model_path": model_path,
+            "roi": roi_snapshot
+        }
+        request_event.set()
+
+    return jsonify({"status": "queued", "request_id": request_id})
 
 
 @app.route("/pose", methods=["GET"])
@@ -336,13 +392,17 @@ def pose_route():
             return jsonify({
                 "pose_matrix": fp_result["pose_matrix"].tolist(),
                 "timestamp": fp_result["timestamp"],
-                "error": fp_result["error"]
+                "error": fp_result["error"],
+                "last_request_id": fp_result["last_request_id"],
+                "inflight": fp_result["inflight"]
             })
         else:
             return jsonify({
                 "pose_matrix": None,
                 "timestamp": fp_result["timestamp"],
-                "error": fp_result["error"] or "No pose yet"
+                "error": fp_result["error"] or "No pose yet",
+                "last_request_id": fp_result["last_request_id"],
+                "inflight": fp_result["inflight"]
             })
 
 
@@ -350,6 +410,7 @@ def pose_route():
 def mjpeg():
     """MJPEG stream with multiple views"""
     view = request.args.get("view", "rgb")
+    frame_interval = 1.0 / MJPEG_FPS
 
     def gen():
         while True:
@@ -427,6 +488,7 @@ def mjpeg():
                 b"Content-Length: " + str(len(jpg)).encode() + b"\r\n"
                 b"\r\n" + jpg + b"\r\n"
             )
+            time.sleep(frame_interval)
 
     return Response(gen(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
@@ -434,9 +496,16 @@ def mjpeg():
 @app.route("/debug")
 def debug():
     """Debug interface with controls"""
-    with rs_lock:
-        rs_w = rs_client.width if rs_client else 640
-        rs_h = rs_client.height if rs_client else 480
+    rs_w = 640
+    rs_h = 480
+    acquired = rs_lock.acquire(timeout=0.2)
+    try:
+        if acquired and rs_client:
+            rs_w = rs_client.width
+            rs_h = rs_client.height
+    finally:
+        if acquired:
+            rs_lock.release()
 
     html = f"""
 <!DOCTYPE html>
@@ -486,32 +555,19 @@ def debug():
   <div class="container">
     <h1>🎯 RealSense → FoundationPose Pipeline</h1>
 
-    <div class="grid">
-      <div class="panel">
-        <div class="hdr">ROI + Pose Overlay (Primary View)</div>
-        <img id="roi" src="/mjpeg?view=roi" />
+    <div class="panel" style="margin-bottom: 20px;">
+      <div class="hdr">Live View</div>
+      <div style="padding: 10px; background: white;">
+        <label for="viewSelect" style="font-weight: 600; margin-right: 8px;">View:</label>
+        <select id="viewSelect">
+          <option value="roi">ROI + Pose Overlay</option>
+          <option value="mask">Mask</option>
+          <option value="rgb">RGB</option>
+          <option value="depth">Depth</option>
+        </select>
       </div>
-      <div class="panel">
-        <div class="hdr">Mask Preview</div>
-        <img id="mask" src="/mjpeg?view=mask" />
-      </div>
+      <img id="viewImg" src="/mjpeg?view=roi" />
     </div>
-
-    <details style="margin-bottom: 20px;">
-      <summary style="cursor: pointer; padding: 10px; background: white; border: 2px solid #ddd; border-radius: 4px; font-weight: 600;">
-        📷 Show Additional Views (RGB, Depth)
-      </summary>
-      <div class="grid" style="margin-top: 15px;">
-        <div class="panel">
-          <div class="hdr">RGB Feed</div>
-          <img id="rgb" data-src="/mjpeg?view=rgb" />
-        </div>
-        <div class="panel">
-          <div class="hdr">Depth Feed</div>
-          <img id="depth" data-src="/mjpeg?view=depth" />
-        </div>
-      </div>
-    </details>
 
     <div class="controls">
       <h2>⚙️ Controls</h2>
@@ -543,8 +599,8 @@ def debug():
 
       <div class="row">
         <label></label>
-        <button id="saveBtn" onclick="saveNext()">💾 Save Next Request</button>
-        <div id="saveStatus" class="status">Next request will be saved!</div>
+        <button id="poseBtn" onclick="requestPose()">🎯 Estimate Pose</button>
+        <div id="poseStatus" class="status">Pose request queued</div>
       </div>
     </div>
   </div>
@@ -588,11 +644,22 @@ def debug():
       }});
     }}
 
-    // Save next request
-    async function saveNext() {{
-      await fetch('/save_next', {{method: 'POST'}});
-      const status = document.getElementById('saveStatus');
+    // Request pose estimation
+    async function requestPose() {{
+      const status = document.getElementById('poseStatus');
+      status.textContent = 'Queueing request...';
       status.classList.add('show');
+      try {{
+        const resp = await fetch('/request_pose', {{method: 'POST'}});
+        const data = await resp.json();
+        if (resp.ok) {{
+          status.textContent = 'Pose request queued';
+        }} else {{
+          status.textContent = data.error || 'Failed to queue request';
+        }}
+      }} catch (err) {{
+        status.textContent = 'Request failed';
+      }}
       setTimeout(() => status.classList.remove('show'), 3000);
     }}
 
@@ -621,22 +688,12 @@ def debug():
       changeModel(e.target.value);
     }});
 
-    // Lazy load additional views when expanded
-    const details = document.querySelector('details');
-    details.addEventListener('toggle', () => {{
-      if (details.open) {{
-        // Load RGB and Depth streams
-        const rgb = document.getElementById('rgb');
-        const depth = document.getElementById('depth');
-        if (rgb.getAttribute('data-src')) {{
-          rgb.src = rgb.getAttribute('data-src');
-          rgb.removeAttribute('data-src');
-        }}
-        if (depth.getAttribute('data-src')) {{
-          depth.src = depth.getAttribute('data-src');
-          depth.removeAttribute('data-src');
-        }}
-      }}
+    // Switch single MJPEG stream to avoid browser overload
+    const viewSelect = document.getElementById('viewSelect');
+    const viewImg = document.getElementById('viewImg');
+    viewSelect.addEventListener('change', () => {{
+      const view = encodeURIComponent(viewSelect.value);
+      viewImg.src = `/mjpeg?view=${{view}}&_ts=${{Date.now()}}`;
     }});
 
     // Initialize
@@ -658,7 +715,7 @@ def debug():
 </body>
 </html>
 """
-    return html
+    return Response(html, mimetype="text/html")
 
 
 def main():

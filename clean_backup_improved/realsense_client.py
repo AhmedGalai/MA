@@ -226,6 +226,55 @@ class RealSenseClient:
             logger.error(f"Unexpected error during frame capture: {e}")
             return None
 
+    def poll(self) -> dict or None:
+        """
+        Poll for aligned RGB and depth frames without blocking.
+
+        Returns the same dict as capture(), or None if no frames are ready.
+        This helps avoid long GIL holds from blocking calls in tight loops.
+        """
+        if not self.is_running:
+            logger.warning("Cannot poll: pipeline is not running")
+            return None
+
+        try:
+            frames = self.pipeline.poll_for_frames()
+            if not frames:
+                return None
+
+            aligned_frames = self.align.process(frames)
+            depth_frame = aligned_frames.get_depth_frame()
+            color_frame = aligned_frames.get_color_frame()
+
+            if not depth_frame or not color_frame:
+                return None
+
+            timestamp = color_frame.get_timestamp() / 1000.0
+            rgb = np.asanyarray(color_frame.get_data(), dtype=np.uint8)
+            depth_raw = np.asanyarray(depth_frame.get_data(), dtype=np.uint16)
+            depth = (depth_raw.astype(np.float32) / 1000.0)
+
+            if len(rgb.shape) != 3 or rgb.shape[2] != 3:
+                logger.error(f"Unexpected RGB shape: {rgb.shape}")
+                return None
+            if len(depth.shape) != 2:
+                logger.error(f"Unexpected depth shape: {depth.shape}")
+                return None
+
+            return {
+                'rgb': rgb,
+                'depth': depth,
+                'K': self.intrinsics.copy(),
+                'timestamp': timestamp
+            }
+
+        except RuntimeError as e:
+            logger.error(f"RealSense poll error: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error during poll: {e}")
+            return None
+
     def get_intrinsics(self) -> np.ndarray:
         """
         Get the camera intrinsics matrix.
