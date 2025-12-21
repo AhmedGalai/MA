@@ -40,6 +40,7 @@ latest_frame: Dict[str, Any] = {
     "rgb": None,
     "depth": None,
     "K": None,
+    "dist": None,
     "timestamp": None
 }
 
@@ -243,7 +244,7 @@ def save_request_data(request_id, rgb, depth, mask, K, model_path, roi, pose_mat
         logger.error(f"Failed to save request data: {e}")
 
 
-def draw_axes_on_image(img, rvec, tvec, K, length=0.05):
+def draw_axes_on_image(img, rvec, tvec, K, dist=None, length=0.05):
     """Draw 3D axes on image"""
     points = np.float32([
         [0, 0, 0],
@@ -252,7 +253,9 @@ def draw_axes_on_image(img, rvec, tvec, K, length=0.05):
         [0, 0, length]
     ]).reshape(-1, 3)
 
-    img_points, _ = cv2.projectPoints(points, rvec, tvec, K, np.zeros(5))
+    if dist is None:
+        dist = np.zeros((5, 1), dtype=np.float32)
+    img_points, _ = cv2.projectPoints(points, rvec, tvec, K, dist)
     img_points = img_points.reshape(-1, 2).astype(int)
 
     img = img.copy()
@@ -421,6 +424,7 @@ def mjpeg():
                 rgb = latest_frame.get("rgb")
                 depth = latest_frame.get("depth")
                 K = latest_frame.get("K")
+                dist = latest_frame.get("dist")
 
             if rgb is None:
                 time.sleep(0.05)
@@ -456,7 +460,7 @@ def mjpeg():
 
                 if pose is not None and K is not None:
                     rvec, tvec = T_to_rvec_tvec(pose)
-                    out = draw_axes_on_image(out, rvec, tvec, K, length=0.1)
+                    out = draw_axes_on_image(out, rvec, tvec, K, dist=dist, length=0.1)
 
                     # Show translation
                     txt = f"t: x={tvec[0][0]:.3f} y={tvec[1][0]:.3f} z={tvec[2][0]:.3f}"
@@ -519,8 +523,9 @@ def debug():
     .container {{ max-width: 1400px; margin: 0 auto; }}
     .grid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; margin-bottom: 20px; }}
     .panel {{ border: 2px solid #ddd; border-radius: 8px; overflow: hidden; background: white; }}
+    .panel.live {{ max-width: 900px; margin: 0 auto 20px auto; }}
     .hdr {{ padding: 10px 15px; background: #4CAF50; color: white; font-weight: 600; font-size: 14px; }}
-    img {{ width: 100%; display: block; background: #000; min-height: 360px; }}
+    img {{ width: 100%; display: block; background: #000; max-height: 360px; object-fit: contain; }}
     .controls {{ background: white; padding: 20px; border: 2px solid #ddd; border-radius: 8px; }}
     .controls h2 {{ margin-top: 0; color: #333; font-size: 18px; }}
     .row {{ display: flex; align-items: center; gap: 15px; margin: 15px 0; }}
@@ -555,7 +560,7 @@ def debug():
   <div class="container">
     <h1>🎯 RealSense → FoundationPose Pipeline</h1>
 
-    <div class="panel" style="margin-bottom: 20px;">
+    <div class="panel live">
       <div class="hdr">Live View</div>
       <div style="padding: 10px; background: white;">
         <label for="viewSelect" style="font-weight: 600; margin-right: 8px;">View:</label>

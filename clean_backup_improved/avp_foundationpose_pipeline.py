@@ -266,6 +266,7 @@ class RealSenseCapture:
             "rgb": None,
             "depth": None,
             "K": None,
+            "dist": None,
             "timestamp": None,
         }
 
@@ -301,6 +302,7 @@ class RealSenseCapture:
                     "rgb": frame.get("rgb"),
                     "depth": frame.get("depth"),
                     "K": frame.get("K"),
+                    "dist": frame.get("dist"),
                     "timestamp": frame.get("timestamp", time.time()),
                 }
 
@@ -414,8 +416,10 @@ def _draw_axes(frame: np.ndarray, rvec: np.ndarray, tvec: np.ndarray,
 
 def _transform_depth_rs_to_avp(depth_rs: np.ndarray,
                                K_rs: np.ndarray,
+                               dist_rs: Optional[np.ndarray],
                                T_avp_rs: np.ndarray,
                                K_avp: np.ndarray,
+                               dist_avp: Optional[np.ndarray],
                                target_size: Tuple[int, int]) -> np.ndarray:
     h_rs, w_rs = depth_rs.shape
     h_avp, w_avp = target_size
@@ -427,28 +431,54 @@ def _transform_depth_rs_to_avp(depth_rs: np.ndarray,
     v = v.reshape(-1)[valid].astype(np.float32)
     z = z[valid].astype(np.float32)
 
-    fx_rs, fy_rs = K_rs[0, 0], K_rs[1, 1]
-    cx_rs, cy_rs = K_rs[0, 2], K_rs[1, 2]
-    X_rs = (u - cx_rs) * z / fx_rs
-    Y_rs = (v - cy_rs) * z / fy_rs
+    use_rs_dist = dist_rs is not None and np.any(np.abs(dist_rs) > 1e-9)
+    if use_rs_dist:
+        pts = np.stack([u, v], axis=1).reshape(-1, 1, 2).astype(np.float32)
+        undist = cv2.undistortPoints(pts, K_rs, dist_rs)
+        x = undist[:, 0, 0]
+        y = undist[:, 0, 1]
+        X_rs = x * z
+        Y_rs = y * z
+    else:
+        fx_rs, fy_rs = K_rs[0, 0], K_rs[1, 1]
+        cx_rs, cy_rs = K_rs[0, 2], K_rs[1, 2]
+        X_rs = (u - cx_rs) * z / fx_rs
+        Y_rs = (v - cy_rs) * z / fy_rs
     points_rs = np.vstack([X_rs, Y_rs, z, np.ones_like(z)])
     points_avp = T_avp_rs @ points_rs
 
-    fx_avp, fy_avp = K_avp[0, 0], K_avp[1, 1]
-    cx_avp, cy_avp = K_avp[0, 2], K_avp[1, 2]
-    X_avp, Y_avp, Z_avp = points_avp[0], points_avp[1], points_avp[2]
-    valid_avp = Z_avp > 0.01
-    X_avp = X_avp[valid_avp]
-    Y_avp = Y_avp[valid_avp]
-    Z_avp = Z_avp[valid_avp]
+    points_avp_xyz = points_avp[:3].T
+    valid_avp = points_avp_xyz[:, 2] > 0.01
+    points_avp_xyz = points_avp_xyz[valid_avp]
 
-    u_avp = (X_avp * fx_avp / Z_avp + cx_avp).astype(np.int32)
-    v_avp = (Y_avp * fy_avp / Z_avp + cy_avp).astype(np.int32)
+    if points_avp_xyz.size == 0:
+        return np.zeros((h_avp, w_avp), dtype=np.float32)
+
+    use_avp_dist = dist_avp is not None and np.any(np.abs(dist_avp) > 1e-9)
+    if use_avp_dist:
+        img_pts, _ = cv2.projectPoints(
+            points_avp_xyz.astype(np.float32),
+            np.zeros((3, 1), dtype=np.float32),
+            np.zeros((3, 1), dtype=np.float32),
+            K_avp,
+            dist_avp,
+        )
+        u_avp = img_pts[:, 0, 0]
+        v_avp = img_pts[:, 0, 1]
+    else:
+        fx_avp, fy_avp = K_avp[0, 0], K_avp[1, 1]
+        cx_avp, cy_avp = K_avp[0, 2], K_avp[1, 2]
+        X_avp, Y_avp, Z_avp = points_avp_xyz[:, 0], points_avp_xyz[:, 1], points_avp_xyz[:, 2]
+        u_avp = X_avp * fx_avp / Z_avp + cx_avp
+        v_avp = Y_avp * fy_avp / Z_avp + cy_avp
+
+    u_avp = u_avp.astype(np.int32)
+    v_avp = v_avp.astype(np.int32)
 
     valid_px = (u_avp >= 0) & (u_avp < w_avp) & (v_avp >= 0) & (v_avp < h_avp)
     u_avp = u_avp[valid_px]
     v_avp = v_avp[valid_px]
-    Z_avp = Z_avp[valid_px]
+    Z_avp = points_avp_xyz[:, 2][valid_px]
 
     depth_avp = np.zeros((h_avp, w_avp), dtype=np.float32)
     depth_avp[v_avp, u_avp] = Z_avp
@@ -809,6 +839,7 @@ def _start_rs_aruco_worker() -> threading.Thread:
             latest = rs_capture.get_latest()
             rgb = latest.get("rgb")
             K = latest.get("K")
+            dist = latest.get("dist")
             ts = latest.get("timestamp") or time.time()
             if rgb is None or K is None:
                 time.sleep(0.02)
@@ -833,12 +864,13 @@ def _start_rs_aruco_worker() -> threading.Thread:
                     markers = len(ids)
                     marker_ids = ids.flatten().tolist()
                     cv2.aruco.drawDetectedMarkers(overlay, corners, ids)
-                    pose = detector.estimate_board_pose(corners, ids, K, np.zeros((5, 1), dtype=np.float32))
+                    dist_coeffs = dist if dist is not None else np.zeros((5, 1), dtype=np.float32)
+                    pose = detector.estimate_board_pose(corners, ids, K, dist_coeffs)
                     if pose is not None:
                         rvec = pose[0].reshape(3, 1)
                         tvec = pose[1].reshape(3, 1)
                         pose_matrix = ArucoDetector.pose_to_transformation_matrix(rvec, tvec)
-                        overlay = _draw_axes(overlay, rvec, tvec, K, np.zeros((5, 1), dtype=np.float32),
+                        overlay = _draw_axes(overlay, rvec, tvec, K, dist_coeffs,
                                              length=rs_cfg["marker_size_m"] * 2.0,
                                              label="RS Aruco")
                 cv2.putText(overlay, "RS", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 255), 2, cv2.LINE_AA)
@@ -966,6 +998,7 @@ def _start_foundationpose_worker(capture: UxPlayCapture, processor: "ArucoProces
             latest = rs_capture.get_latest()
             depth_rs = latest.get("depth")
             K_rs = latest.get("K")
+            dist_rs = latest.get("dist")
             if depth_rs is None or K_rs is None:
                 with foundationpose_lock:
                     foundationpose_latest.update(
@@ -985,7 +1018,13 @@ def _start_foundationpose_worker(capture: UxPlayCapture, processor: "ArucoProces
 
             try:
                 depth_avp = _transform_depth_rs_to_avp(
-                    depth_rs, K_rs, T_avp_rs, processor.K, (capture.height, capture.width)
+                    depth_rs,
+                    K_rs,
+                    dist_rs,
+                    T_avp_rs,
+                    processor.K,
+                    processor.dist,
+                    (capture.height, capture.width),
                 )
             except Exception as e:
                 with foundationpose_lock:
@@ -1184,7 +1223,12 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
 
     @app.route("/intrinsics", methods=["GET"])
     def intrinsics():
-        return jsonify({"K": processor.K.tolist()}), 200
+        return jsonify(
+            {
+                "K": processor.K.tolist(),
+                "dist": processor.dist.reshape(-1).tolist(),
+            }
+        ), 200
 
     @app.route("/get_rgbd_frame", methods=["GET"])
     def get_rgbd_frame():
@@ -1330,6 +1374,7 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
         latest = rs_capture.get_latest()
         depth = latest.get("depth")
         K_rs = latest.get("K")
+        dist_rs = latest.get("dist")
         if depth is None or K_rs is None:
             return jsonify({"error": "No RealSense depth yet"}), 503
         T_avp_rs = _get_T_avp_rs()
@@ -1337,7 +1382,16 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
             return jsonify({"error": "Missing calibration for RS->AVP transform"}), 503
 
         K_avp = processor.K
-        depth_avp = _transform_depth_rs_to_avp(depth, K_rs, T_avp_rs, K_avp, (capture.height, capture.width))
+        dist_avp = processor.dist
+        depth_avp = _transform_depth_rs_to_avp(
+            depth,
+            K_rs,
+            dist_rs,
+            T_avp_rs,
+            K_avp,
+            dist_avp,
+            (capture.height, capture.width),
+        )
         depth_norm = cv2.normalize(depth_avp, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
         depth_colormap = cv2.applyColorMap(depth_norm, cv2.COLORMAP_JET)
         depth_b64 = _encode_jpeg_b64(depth_colormap, quality=85)
@@ -1356,21 +1410,27 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
     @app.route("/get_intrinsics", methods=["GET"])
     def get_intrinsics():
         rs_K = None
+        rs_dist = None
         if rs_capture is not None:
             latest = rs_capture.get_latest()
             K = latest.get("K")
+            dist = latest.get("dist")
             if K is not None:
                 rs_K = K.tolist()
+            if dist is not None:
+                rs_dist = dist.reshape(-1).tolist()
         return jsonify(
             {
                 "rs": {
                     "K": rs_K,
+                    "dist": rs_dist,
                     "calculated": rs_K is not None,
                     "method": "realsense",
                     "timestamp": time.time(),
                 },
                 "avp": {
                     "K": processor.K.tolist(),
+                    "dist": processor.dist.reshape(-1).tolist(),
                     "calculated": True,
                     "method": "intrinsics.json",
                     "timestamp": time.time(),
@@ -1563,15 +1623,16 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 14px; }
     .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
     .panel { border: 1px solid #ddd; border-radius: 8px; overflow: hidden; }
+    .panel.live { max-width: 900px; margin: 0 auto 12px auto; }
     .hdr { padding: 8px 10px; background: #f7f7f7; border-bottom: 1px solid #eee; font-weight: 600; }
-    img { width: 100%; display: block; background: #000; }
+    img { width: 100%; display: block; background: #000; max-height: 360px; object-fit: contain; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
   </style>
 </head>
 <body>
   <h2 style="margin: 0 0 10px 0;">Debug Views</h2>
 
-  <div class="panel" style="margin-bottom: 12px;">
+  <div class="panel live">
     <div class="hdr">Live View</div>
     <div style="padding: 10px; background: #fff;">
       <label for="viewSelect" style="font-weight: 600; margin-right: 8px;">View:</label>
@@ -1716,6 +1777,7 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
                     latest = rs_capture.get_latest()
                     depth = latest.get("depth")
                     K_rs = latest.get("K")
+                    dist_rs = latest.get("dist")
                     if depth is None or K_rs is None:
                         time.sleep(0.02)
                         continue
@@ -1723,7 +1785,15 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
                     if T_avp_rs is None:
                         time.sleep(0.05)
                         continue
-                    depth_avp = _transform_depth_rs_to_avp(depth, K_rs, T_avp_rs, K, (capture.height, capture.width))
+                    depth_avp = _transform_depth_rs_to_avp(
+                        depth,
+                        K_rs,
+                        dist_rs,
+                        T_avp_rs,
+                        K,
+                        dist,
+                        (capture.height, capture.width),
+                    )
                     depth_norm = cv2.normalize(depth_avp, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
                     out = cv2.applyColorMap(depth_norm, cv2.COLORMAP_JET)
                     cv2.putText(out, "RS Depth -> AVP", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)

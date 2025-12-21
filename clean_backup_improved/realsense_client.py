@@ -46,6 +46,7 @@ class RealSenseClient:
         self.align = None
         self.is_running = False
         self.intrinsics = None
+        self.dist_coeffs = None
 
         logger.info(f"RealSenseClient initialized with resolution {width}x{height} @ {fps} fps")
 
@@ -107,6 +108,8 @@ class RealSenseClient:
                 [0, intr.fy, intr.ppy],
                 [0, 0, 1]
             ], dtype=np.float32)
+            coeffs = intr.coeffs if hasattr(intr, 'coeffs') else [0, 0, 0, 0, 0]
+            self.dist_coeffs = np.array(coeffs[:5], dtype=np.float32).reshape(-1, 1)
 
             # Warm up the camera by discarding initial frames
             # Note: Using wait_for_frames() without timeout (blocks until ready)
@@ -167,6 +170,7 @@ class RealSenseClient:
                 - 'rgb': uint8 ndarray of shape (H, W, 3) in BGR format
                 - 'depth': float32 ndarray of shape (H, W) in meters
                 - 'K': 3x3 float32 intrinsics matrix
+                - 'dist': distortion coefficients (5x1 float32)
                 - 'timestamp': float timestamp in seconds
             None: On capture failure or timeout
         """
@@ -213,6 +217,7 @@ class RealSenseClient:
                 'rgb': rgb,
                 'depth': depth,
                 'K': self.intrinsics.copy(),
+                'dist': None if self.dist_coeffs is None else self.dist_coeffs.copy(),
                 'timestamp': timestamp
             }
 
@@ -265,6 +270,7 @@ class RealSenseClient:
                 'rgb': rgb,
                 'depth': depth,
                 'K': self.intrinsics.copy(),
+                'dist': None if self.dist_coeffs is None else self.dist_coeffs.copy(),
                 'timestamp': timestamp
             }
 
