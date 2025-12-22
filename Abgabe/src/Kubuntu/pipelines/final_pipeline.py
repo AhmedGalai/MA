@@ -759,7 +759,55 @@ class ArucoProcessor:
         except Exception:
             pass
 
+        # fallback: manual board PnP from marker IDs
+        obj_pts = []
+        img_pts = []
+        for marker_id, corner in zip(ids, corners):
+            obj = self._marker_corners_3d(int(marker_id))
+            if obj is None:
+                continue
+            img = np.asarray(corner, dtype=np.float32).reshape(-1, 2)
+            obj_pts.append(obj)
+            img_pts.append(img)
+
+        if obj_pts:
+            obj_pts = np.concatenate(obj_pts, axis=0)
+            img_pts = np.concatenate(img_pts, axis=0)
+            try:
+                ok, rvec, tvec = cv2.solvePnP(
+                    obj_pts, img_pts, self.K, self.dist, flags=cv2.SOLVEPNP_IPPE
+                )
+                if ok:
+                    return True, rvec.reshape(3, 1), tvec.reshape(3, 1)
+            except Exception:
+                pass
+
+            try:
+                ok, rvec, tvec = cv2.solvePnP(obj_pts, img_pts, self.K, self.dist)
+                if ok:
+                    return True, rvec.reshape(3, 1), tvec.reshape(3, 1)
+            except Exception:
+                pass
+
         return False, None, None
+
+    def _marker_corners_3d(self, marker_id: int) -> Optional[np.ndarray]:
+        if marker_id < 0 or marker_id >= self.cfg.rows * self.cfg.cols:
+            return None
+        row, col = divmod(marker_id, self.cfg.cols)
+        size = float(self.cfg.marker_size_m)
+        sep = float(self.cfg.separation_m)
+        x0 = col * (size + sep)
+        y0 = row * (size + sep)
+        return np.array(
+            [
+                [x0, y0, 0.0],
+                [x0 + size, y0, 0.0],
+                [x0 + size, y0 + size, 0.0],
+                [x0, y0 + size, 0.0],
+            ],
+            dtype=np.float32,
+        )
 
     def _loop(self):
         logger.info("Aruco processor thread started (fps=%.2f)", self.process_fps)
