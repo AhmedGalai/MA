@@ -30,6 +30,7 @@ struct PoseOverlayWithStreamingApp: App {
 
         WindowGroup("Anchor Setup", id: "anchor") { AnchorSetupView() }
             .environmentObject(appModel)
+            .environmentObject(arucoStream)
 
         WindowGroup("ROI Window", id: "roi") { ROIWindowView() }
             .windowStyle(.plain)

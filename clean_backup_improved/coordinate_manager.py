@@ -54,19 +54,24 @@ class CoordinateManager:
 
         self.T_world_rs = T_world_rs.astype(np.float64)
         self.T_world_avp: Optional[ndarray] = None
-        self.head_pose_correction = np.eye(4, dtype=np.float64)
+        self.T_world_avp_ref: Optional[ndarray] = None  # Reference when ArUco last seen
+        self.T_world_head_ref: Optional[ndarray] = None  # Head pose when ArUco last seen
+        self.T_world_head_current = np.eye(4, dtype=np.float64)  # Current head pose
         self.last_head_pose_time: Optional[float] = None
+        self.head_pose_staleness_warning_threshold = 5.0  # seconds
 
-    def set_avp_calibration(self, T_world_avp: ndarray) -> None:
+    def set_avp_calibration(self, T_world_avp: ndarray, T_world_head: Optional[ndarray] = None) -> None:
         """
-        Store AVP calibration from single ArUco detection.
+        Store AVP calibration from ArUco detection with optional reference head pose.
 
         This transformation represents the initial/reference pose of the AVP
         coordinate frame relative to the World coordinate frame, typically
-        obtained from ArUco marker detection.
+        obtained from ArUco marker detection. If a reference head pose is provided,
+        it enables continuous tracking when ArUco is not visible.
 
         Args:
             T_world_avp (ndarray): 4x4 transformation matrix from AVP to World
+            T_world_head (ndarray, optional): 4x4 head pose at calibration time
 
         Raises:
             ValueError: If T_world_avp is not a 4x4 matrix
@@ -78,19 +83,32 @@ class CoordinateManager:
         if T_world_avp.shape != (4, 4):
             raise ValueError(f"T_world_avp must be 4x4, got shape {T_world_avp.shape}")
 
-        self.T_world_avp = T_world_avp.astype(np.float64)
+        # Store reference transform
+        self.T_world_avp_ref = T_world_avp.astype(np.float64)
+        self.T_world_avp = self.T_world_avp_ref.copy()
+
+        # Store reference head pose if provided
+        if T_world_head is not None:
+            if not isinstance(T_world_head, ndarray):
+                raise TypeError("T_world_head must be a numpy ndarray")
+            if T_world_head.shape != (4, 4):
+                raise ValueError(f"T_world_head must be 4x4, got shape {T_world_head.shape}")
+            self.T_world_head_ref = T_world_head.astype(np.float64)
+        else:
+            # No head pose provided, use current or identity
+            self.T_world_head_ref = self.T_world_head_current.copy()
 
     def update_head_pose(self, position: List[float], quaternion: List[float],
                         timestamp: float) -> None:
         """
-        Update head pose from streamed data.
+        Update head pose from streamed data and recompute T_world_avp for continuous tracking.
 
         Converts position and quaternion data to a 4x4 homogeneous transformation
-        matrix and stores it as the head pose correction. This allows dynamic
-        updates to the AVP frame based on head tracking data.
+        matrix. If a reference head pose exists, computes the relative head motion
+        and updates T_world_avp to maintain tracking when ArUco is not visible.
 
         Args:
-            position (List[float]): [x, y, z] position in meters
+            position (List[float]): [x, y, z] position in meters (in ARKit world frame)
             quaternion (List[float]): [x, y, z, w] quaternion (scalar last)
             timestamp (float): Timestamp of head pose measurement
 
@@ -114,20 +132,34 @@ class CoordinateManager:
         # Quaternion is [x, y, z, w] format (scipy expects this)
         rotation_matrix = Rotation.from_quat(quaternion).as_matrix()
 
-        self.head_pose_correction = np.eye(4, dtype=np.float64)
-        self.head_pose_correction[:3, :3] = rotation_matrix
-        self.head_pose_correction[:3, 3] = position
+        self.T_world_head_current = np.eye(4, dtype=np.float64)
+        self.T_world_head_current[:3, :3] = rotation_matrix
+        self.T_world_head_current[:3, 3] = position
 
         self.last_head_pose_time = timestamp
+
+        # If we have a reference calibration, update T_world_avp based on head motion
+        if self.T_world_avp_ref is not None and self.T_world_head_ref is not None:
+            # Compute head motion: T_head_delta = inv(T_world_head_ref) @ T_world_head_current
+            # This represents how the head has moved since calibration
+            try:
+                T_head_delta = np.linalg.inv(self.T_world_head_ref) @ self.T_world_head_current
+
+                # Update AVP transform: T_world_avp = T_world_avp_ref @ T_head_delta
+                # This assumes AVP camera moves rigidly with the head
+                self.T_world_avp = self.T_world_avp_ref @ T_head_delta
+            except np.linalg.LinAlgError:
+                # If inversion fails, keep previous T_world_avp
+                pass
 
     def get_T_rs_avp(self) -> ndarray:
         """
         Compute transformation from AVP to RealSense frame.
 
-        Computes: T_rs_avp = inv(T_world_rs) @ T_world_avp @ head_pose_correction
+        Computes: T_rs_avp = inv(T_world_rs) @ T_world_avp
 
-        This represents the transformation of coordinates from the AVP frame
-        (including head pose updates) to the RealSense camera frame.
+        T_world_avp is automatically updated when head pose changes (if reference exists),
+        so this method returns the current transform accounting for head motion.
 
         Returns:
             ndarray: 4x4 transformation matrix from AVP to RealSense
@@ -139,13 +171,28 @@ class CoordinateManager:
         if self.T_world_avp is None:
             raise RuntimeError("AVP calibration not set. Call set_avp_calibration() first.")
 
+        # Check head pose staleness if we're using continuous tracking
+        if (self.T_world_avp_ref is not None and
+            self.T_world_head_ref is not None and
+            self.last_head_pose_time is not None):
+            age = time.time() - self.last_head_pose_time
+            if age > self.head_pose_staleness_warning_threshold:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(
+                    "Head pose data is stale (%.1f seconds old). "
+                    "Continuous tracking may be inaccurate.",
+                    age
+                )
+
         try:
             T_rs_world = np.linalg.inv(self.T_world_rs)
         except np.linalg.LinAlgError as e:
             raise np.linalg.LinAlgError(f"Cannot invert T_world_rs: {e}")
 
-        # T_rs_avp = inv(T_world_rs) @ T_world_avp @ head_pose_correction
-        T_rs_avp = T_rs_world @ self.T_world_avp @ self.head_pose_correction
+        # T_rs_avp = inv(T_world_rs) @ T_world_avp
+        # Note: T_world_avp already includes head motion if reference exists
+        T_rs_avp = T_rs_world @ self.T_world_avp
 
         return T_rs_avp
 

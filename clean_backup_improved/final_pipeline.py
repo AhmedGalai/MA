@@ -115,10 +115,6 @@ foundationpose_latest = {
     "success": False,
 }
 
-
-foundationpose_pair_lock = threading.Lock()
-foundationpose_pair_id: Optional[str] = None
-
 foundationpose_save_lock = threading.Lock()
 foundationpose_save_pair = {
     "armed": False,
@@ -820,13 +816,46 @@ class ArucoProcessor:
                             avp_pose_latest["tvec"] = tvec.reshape(3).copy()
                             avp_pose_latest["timestamp"] = ts
 
-                        # keep your coord manager behavior if present (it may do its own thing)
+                        # Update coordinate_manager with T_world_avp (not T_avp_board!)
+                        # T_world_avp = T_world_rs @ T_rs_board @ inv(T_avp_board)
                         with coord_lock:
                             if coordinate_manager is not None:
                                 try:
-                                    coordinate_manager.set_avp_calibration(T)
-                                except Exception:
-                                    pass
+                                    # Get T_rs_board from RS ArUco detection
+                                    with rs_aruco_lock:
+                                        T_rs_board = rs_aruco_latest.get("pose_matrix")
+
+                                    if T_rs_board is not None:
+                                        # Get current head pose for reference tracking
+                                        with head_pose_lock:
+                                            head_pos = head_pose_latest.get("position") if head_pose_latest else None
+                                            head_quat = head_pose_latest.get("quaternion") if head_pose_latest else None
+
+                                        # Construct T_world_head if head pose available
+                                        T_world_head = None
+                                        if head_pos is not None and head_quat is not None:
+                                            try:
+                                                rot = Rotation.from_quat(head_quat).as_matrix()
+                                                T_world_head = np.eye(4, dtype=np.float64)
+                                                T_world_head[:3, :3] = rot
+                                                T_world_head[:3, 3] = head_pos
+                                                logger.debug("Captured reference head pose for continuous tracking")
+                                            except Exception as e:
+                                                logger.warning("Failed to construct T_world_head: %s", e)
+                                                T_world_head = None
+
+                                        # Compute T_world_avp correctly
+                                        T_world_rs = coordinate_manager.get_T_world_rs()
+                                        T_avp_board = T  # Current detection
+                                        T_world_avp = T_world_rs @ T_rs_board @ np.linalg.inv(T_avp_board)
+
+                                        # Set calibration with reference head pose for continuous tracking
+                                        coordinate_manager.set_avp_calibration(T_world_avp, T_world_head)
+                                        logger.debug("Updated coordinate_manager with T_world_avp from dual ArUco detection")
+                                    else:
+                                        logger.debug("Cannot update coordinate_manager: RS ArUco not available")
+                                except Exception as e:
+                                    logger.warning("Failed to update coordinate_manager: %s", e)
 
             except Exception as e:
                 logger.warning("Aruco detection failed: %s", e)
@@ -969,26 +998,6 @@ def _get_selected_model() -> str:
 #     return False
 
 
-def _consume_save_next_foundationpose_pair_id() -> Optional[str]:
-    """
-    Arms saving for exactly one cycle. Returns a shared pair_id for both
-    RS and AVP saves. Consumed once.
-    """
-    global foundationpose_save_next, foundationpose_pair_id
-    with foundationpose_save_lock:
-        if not foundationpose_save_next:
-            return None
-        foundationpose_save_next = False
-
-    # Generate a new pair id each time the button is clicked
-    with foundationpose_pair_lock:
-        if foundationpose_pair_id is None:
-            foundationpose_pair_id = time.strftime("%Y%m%d_%H%M%S") + f"_{int(time.time()*1000)%1000:03d}"
-        pid = foundationpose_pair_id
-        foundationpose_pair_id = None
-        return pid
-
-
 def _get_processing_stride() -> int:
     with processing_stride_lock:
         return max(1, int(processing_stride))
@@ -1004,10 +1013,14 @@ def _save_foundationpose_request(
     try:
         base_dir = os.path.join(CONFIG["uxplay"]["frame_dir"], "foundationpose")
         os.makedirs(base_dir, exist_ok=True)
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        prefix = os.path.join(base_dir, f"fp_{ts}")
 
-        cv2.imwrite(prefix + "_rgb.jpg", rgb)
+        cid = meta.get("capture_id") or time.strftime("%Y%m%d_%H%M%S")
+        prefix = os.path.join(base_dir, f"fp_{cid}")
+
+        # rgb is RGB; cv2.imwrite expects BGR
+        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        cv2.imwrite(prefix + "_rgb.jpg", bgr)
+
         cv2.imwrite(prefix + "_mask.png", mask)
         np.save(prefix + "_depth.npy", depth.astype(np.float32))
         depth_norm = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
@@ -1015,10 +1028,12 @@ def _save_foundationpose_request(
 
         if pose is not None:
             np.save(prefix + "_pose.npy", pose.astype(np.float32))
+
         meta_path = prefix + "_meta.json"
         with open(meta_path, "w") as f:
             json.dump(meta, f, indent=2)
-        logger.info("Saved FoundationPose request to %s", base_dir)
+
+        logger.info("Saved FoundationPose AVP request: %s", prefix)
     except Exception as e:
         logger.warning("Failed to save FoundationPose request: %s", e)
 
@@ -1033,10 +1048,14 @@ def _save_foundationpose_rs_request(
     try:
         base_dir = os.path.join(CONFIG["uxplay"]["frame_dir"], "foundationpose_rs")
         os.makedirs(base_dir, exist_ok=True)
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        prefix = os.path.join(base_dir, f"fp_rs_{ts}")
 
-        cv2.imwrite(prefix + "_rgb.jpg", rgb)
+        cid = meta.get("capture_id") or time.strftime("%Y%m%d_%H%M%S")
+        prefix = os.path.join(base_dir, f"fp_rs_{cid}")
+
+        # rgb is RGB; cv2.imwrite expects BGR
+        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        cv2.imwrite(prefix + "_rgb.jpg", bgr)
+
         cv2.imwrite(prefix + "_mask.png", mask)
         np.save(prefix + "_depth.npy", depth.astype(np.float32))
         depth_norm = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
@@ -1044,10 +1063,12 @@ def _save_foundationpose_rs_request(
 
         if pose is not None:
             np.save(prefix + "_pose.npy", pose.astype(np.float32))
+
         meta_path = prefix + "_meta.json"
         with open(meta_path, "w") as f:
             json.dump(meta, f, indent=2)
-        logger.info("Saved FoundationPose RS request to %s", base_dir)
+
+        logger.info("Saved FoundationPose RS request: %s", prefix)
     except Exception as e:
         logger.warning("Failed to save FoundationPose RS request: %s", e)
 
@@ -1168,6 +1189,18 @@ def _start_foundationpose_worker(capture: UxPlayCapture, processor: "ArucoProces
 
             capture_id = _consume_save_avp()
             if capture_id is not None:
+                # include both directions
+                T_rs_avp = None
+                try:
+                    T_rs_avp = np.linalg.inv(T_avp_rs).astype(np.float32).tolist()
+                except Exception:
+                    pass
+
+                with avp_pose_lock:
+                    T_avp_board = avp_pose_latest.get("pose_matrix")
+                with rs_aruco_lock:
+                    T_rs_board = rs_aruco_latest.get("pose_matrix")
+
                 _save_foundationpose_request(
                     rgb=rgb,
                     depth=depth_avp,
@@ -1179,8 +1212,17 @@ def _start_foundationpose_worker(capture: UxPlayCapture, processor: "ArucoProces
                         "timestamp": ts,
                         "model": model_name,
                         "foundationpose_url": CONFIG["network"]["foundationpose_url"],
+
                         "rs_depth_aligned_to_color": bool(aligned_ok),
-                        "T_avp_rs": None if T_avp_rs is None else T_avp_rs.tolist(),
+
+                        # key transforms for later evaluation
+                        "T_avp_rs": T_avp_rs.astype(np.float32).tolist() if T_avp_rs is not None else None,
+                        "T_rs_avp": T_rs_avp,
+
+                        # optional but very useful debugging context
+                        "T_avp_board": None if T_avp_board is None else T_avp_board.astype(np.float32).tolist(),
+                        "T_rs_board": None if T_rs_board is None else T_rs_board.astype(np.float32).tolist(),
+
                         "avp_roi": vars(avp_roi_cfg),
                     },
                 )
@@ -1283,6 +1325,20 @@ def _start_foundationpose_rs_worker() -> threading.Thread:
 
             capture_id = _consume_save_rs()
             if capture_id is not None:
+                # grab transform at save time (best effort)
+                T_avp_rs_now = _get_T_avp_rs()
+                T_rs_avp = None
+                try:
+                    if T_avp_rs_now is not None:
+                        T_rs_avp = np.linalg.inv(T_avp_rs_now).astype(np.float32).tolist()
+                except Exception:
+                    pass
+
+                with avp_pose_lock:
+                    T_avp_board = avp_pose_latest.get("pose_matrix")
+                with rs_aruco_lock:
+                    T_rs_board = rs_aruco_latest.get("pose_matrix")
+
                 _save_foundationpose_rs_request(
                     rgb=rgb,
                     depth=depth,
@@ -1294,6 +1350,15 @@ def _start_foundationpose_rs_worker() -> threading.Thread:
                         "timestamp": ts,
                         "model": model_name,
                         "foundationpose_url": CONFIG["network"]["foundationpose_url"],
+
+                        # key transforms for later evaluation
+                        "T_avp_rs": None if T_avp_rs_now is None else T_avp_rs_now.astype(np.float32).tolist(),
+                        "T_rs_avp": T_rs_avp,
+
+                        # optional debug
+                        "T_avp_board": None if T_avp_board is None else T_avp_board.astype(np.float32).tolist(),
+                        "T_rs_board": None if T_rs_board is None else T_rs_board.astype(np.float32).tolist(),
+
                         "roi": {"x_center": cx, "y_center": cy, "radius": radius},
                     },
                 )
@@ -1395,18 +1460,26 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
 
     @app.route("/foundationpose_save_next", methods=["GET", "POST"])
     def foundationpose_save_next_route():
-        global foundationpose_save_next, foundationpose_pair_id
         if request.method == "GET":
-            with foundationpose_save_lock:
-                return jsonify({"enabled": foundationpose_save_next}), 200
+            return jsonify(_get_save_pair_state()), 200
 
         data = request.get_json(silent=True) or {}
         enabled = bool(data.get("enabled", False))
+
+        if enabled:
+            st = _arm_save_pair()
+            return jsonify({"armed": True, **st}), 200
+
+        # disarm
         with foundationpose_save_lock:
-            foundationpose_save_next = enabled
-        with foundationpose_pair_lock:
-            foundationpose_pair_id = time.strftime("%Y%m%d_%H%M%S") + f"_{int(time.time()*1000)%1000:03d}" if enabled else None
-        return jsonify({"enabled": foundationpose_save_next, "pair_id": foundationpose_pair_id}), 200
+            foundationpose_save_pair.update({
+                "armed": False,
+                "capture_id": None,
+                "need_avp": False,
+                "need_rs": False,
+                "armed_time": None,
+            })
+        return jsonify(_get_save_pair_state()), 200
 
 
 
@@ -1926,6 +1999,10 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
         <option value="rs_roi">RS ROI</option>
         <option value="avp_rs">AVP + RS Pose Overlay</option>
         <option value="avp_depth">RS Depth → AVP</option>
+        <option value="fp_avp_on_avp">FP (AVP request) → AVP view</option>
+        <option value="fp_avp_on_rs">FP (AVP request) → RS view</option>
+        <option value="fp_rs_on_avp">FP (RS request) → AVP view</option>
+        <option value="fp_rs_on_rs">FP (RS request) → RS view</option>
       </select>
     </div>
     <img id="viewImg" src="/mjpeg?view=overlay" />
@@ -2098,18 +2175,26 @@ wire();
     def mjpeg():
         """
         MJPEG stream with multiple views:
-          /mjpeg?view=raw       -> raw UxPlay feed
-          /mjpeg?view=overlay   -> AVP ArUco overlay
-          /mjpeg?view=mask      -> AVP ROI mask (normalized)
-          /mjpeg?view=rs_rgb    -> RealSense RGB
-          /mjpeg?view=rs_depth  -> RealSense depth colormap
-          /mjpeg?view=rs_aruco  -> RealSense ArUco overlay
-          /mjpeg?view=rs_roi    -> RealSense RGB with ROI + FoundationPose overlay
-          /mjpeg?view=avp_rs    -> AVP view with RS pose overlay
-          /mjpeg?view=avp_depth -> RS depth transformed to AVP view
+          /mjpeg?view=raw          -> raw UxPlay feed
+          /mjpeg?view=overlay      -> AVP ArUco overlay
+          /mjpeg?view=mask         -> AVP ROI mask (normalized)
+          /mjpeg?view=rs_rgb       -> RealSense RGB
+          /mjpeg?view=rs_depth     -> RealSense depth colormap
+          /mjpeg?view=rs_aruco     -> RealSense ArUco overlay
+          /mjpeg?view=rs_roi       -> RealSense RGB with ROI + FoundationPose overlay
+          /mjpeg?view=avp_rs       -> AVP view with RS pose overlay
+          /mjpeg?view=avp_depth    -> RS depth transformed to AVP view
+          /mjpeg?view=fp_avp_on_avp -> FoundationPose (from AVP request) overlayed on AVP view
+          /mjpeg?view=fp_avp_on_rs  -> FoundationPose (from AVP request) overlayed on RS view
+          /mjpeg?view=fp_rs_on_avp  -> FoundationPose (from RS request) overlayed on AVP view
+          /mjpeg?view=fp_rs_on_rs   -> FoundationPose (from RS request) overlayed on RS view
         """
         view = (request.args.get("view", "overlay") or "overlay").lower().strip()
-        if view not in ("raw", "overlay", "mask", "rs_rgb", "rs_depth", "rs_aruco", "rs_roi", "avp_rs", "avp_depth"):
+        valid_views = (
+            "raw", "overlay", "mask", "rs_rgb", "rs_depth", "rs_aruco", "rs_roi",
+            "avp_rs", "avp_depth", "fp_avp_on_avp", "fp_avp_on_rs", "fp_rs_on_avp", "fp_rs_on_rs"
+        )
+        if view not in valid_views:
             view = "overlay"
         frame_interval = 1.0 / MJPEG_FPS
 
@@ -2120,7 +2205,7 @@ wire();
             while True:
                 out = None
 
-                if view in ("raw", "overlay", "mask", "avp_rs"):
+                if view in ("raw", "overlay", "mask", "avp_rs", "fp_avp_on_avp", "fp_rs_on_avp"):
                     frame_bgr, _ts = capture.get_latest()
                     if frame_bgr is None:
                         time.sleep(0.02)
@@ -2250,6 +2335,99 @@ wire();
                     depth_norm = cv2.normalize(depth_avp, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
                     out = cv2.applyColorMap(depth_norm, cv2.COLORMAP_JET)
                     cv2.putText(out, "RS Depth -> AVP (z-buffer)", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+
+                elif view == "fp_avp_on_avp":
+                    # FoundationPose (from AVP request) overlayed on AVP view
+                    if out is None:
+                        time.sleep(0.02)
+                        continue
+                    with foundationpose_lock:
+                        fp_pose = foundationpose_latest.get("pose_matrix")
+                    if fp_pose is not None:
+                        rvec, tvec = _T_to_rvec_tvec(fp_pose)
+                        out = _draw_axes(out, rvec, tvec, K, dist, processor.cfg.axis_length_m, label="FP(AVP)")
+                        txt = f"FP(AVP): t={tvec[0][0]:.3f},{tvec[1][0]:.3f},{tvec[2][0]:.3f}"
+                        cv2.putText(out, txt, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
+                    else:
+                        cv2.putText(out, "FP(AVP): no pose", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
+
+                elif view == "fp_rs_on_avp":
+                    # FoundationPose (from RS request) overlayed on AVP view
+                    if out is None:
+                        time.sleep(0.02)
+                        continue
+                    # Need to transform RS pose to AVP frame
+                    with foundationpose_rs_lock:
+                        fp_rs_pose = foundationpose_rs_latest.get("pose_matrix")
+                    if fp_rs_pose is not None:
+                        T_avp_rs = _get_T_avp_rs()
+                        if T_avp_rs is not None:
+                            # Transform pose from RS to AVP: T_avp_object = T_avp_rs @ T_rs_object
+                            fp_avp_pose = T_avp_rs @ fp_rs_pose
+                            rvec, tvec = _T_to_rvec_tvec(fp_avp_pose)
+                            out = _draw_axes(out, rvec, tvec, K, dist, processor.cfg.axis_length_m, label="FP(RS)")
+                            txt = f"FP(RS): t={tvec[0][0]:.3f},{tvec[1][0]:.3f},{tvec[2][0]:.3f}"
+                            cv2.putText(out, txt, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2, cv2.LINE_AA)
+                        else:
+                            cv2.putText(out, "FP(RS): no T_avp_rs", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
+                    else:
+                        cv2.putText(out, "FP(RS): no pose", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
+
+                elif view == "fp_avp_on_rs":
+                    # FoundationPose (from AVP request) overlayed on RS view
+                    if rs_capture is None:
+                        time.sleep(0.05)
+                        continue
+                    latest = rs_capture.get_latest()
+                    out = latest.get("rgb")
+                    K_rs = latest.get("K")
+                    if out is None or K_rs is None:
+                        time.sleep(0.02)
+                        continue
+                    out = out.copy()
+                    with foundationpose_lock:
+                        fp_avp_pose = foundationpose_latest.get("pose_matrix")
+                    if fp_avp_pose is not None:
+                        T_avp_rs = _get_T_avp_rs()
+                        if T_avp_rs is not None:
+                            # Transform pose from AVP to RS: T_rs_object = inv(T_avp_rs) @ T_avp_object
+                            try:
+                                T_rs_avp = np.linalg.inv(T_avp_rs)
+                                fp_rs_pose = T_rs_avp @ fp_avp_pose
+                                rvec, tvec = _T_to_rvec_tvec(fp_rs_pose)
+                                out = _draw_axes(out, rvec, tvec, K_rs, np.zeros((5, 1), dtype=np.float32),
+                                               processor.cfg.axis_length_m, label="FP(AVP)")
+                                txt = f"FP(AVP): t={tvec[0][0]:.3f},{tvec[1][0]:.3f},{tvec[2][0]:.3f}"
+                                cv2.putText(out, txt, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
+                            except np.linalg.LinAlgError:
+                                cv2.putText(out, "FP(AVP): cannot invert T_avp_rs", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
+                        else:
+                            cv2.putText(out, "FP(AVP): no T_avp_rs", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
+                    else:
+                        cv2.putText(out, "FP(AVP): no pose", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
+
+                elif view == "fp_rs_on_rs":
+                    # FoundationPose (from RS request) overlayed on RS view
+                    if rs_capture is None:
+                        time.sleep(0.05)
+                        continue
+                    latest = rs_capture.get_latest()
+                    out = latest.get("rgb")
+                    K_rs = latest.get("K")
+                    if out is None or K_rs is None:
+                        time.sleep(0.02)
+                        continue
+                    out = out.copy()
+                    with foundationpose_rs_lock:
+                        fp_rs_pose = foundationpose_rs_latest.get("pose_matrix")
+                    if fp_rs_pose is not None:
+                        rvec, tvec = _T_to_rvec_tvec(fp_rs_pose)
+                        out = _draw_axes(out, rvec, tvec, K_rs, np.zeros((5, 1), dtype=np.float32),
+                                       processor.cfg.axis_length_m, label="FP(RS)")
+                        txt = f"FP(RS): t={tvec[0][0]:.3f},{tvec[1][0]:.3f},{tvec[2][0]:.3f}"
+                        cv2.putText(out, txt, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2, cv2.LINE_AA)
+                    else:
+                        cv2.putText(out, "FP(RS): no pose", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
 
                 if out is None:
                     time.sleep(0.02)

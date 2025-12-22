@@ -70,18 +70,10 @@ final class DebugDashboardModel: ObservableObject {
     @Published var saveNextFoundationPose = false
     @Published var processingStride: Int = 1
 
-    // HSV parameters (mean color + std deviation)
-    @Published var hsvMeanH: Int = 90
-    @Published var hsvMeanS: Int = 255
-    @Published var hsvMeanV: Int = 255
-    @Published var hsvMeanColor: Color = .cyan
-    @Published var hsvStdH: Int = 10
-    @Published var hsvStdS: Int = 40
-    @Published var hsvStdV: Int = 40
+    @Published var selectedView: String = "overlay"
 
     private var baseURL: URL?
     private var pollTask: Task<Void, Never>?
-    private var suppressHSVPost = false
 
     func updateBaseURL(_ url: URL?) {
         baseURL = url
@@ -131,7 +123,6 @@ final class DebugDashboardModel: ObservableObject {
         async let transformTask = fetchTransforms(baseURL: baseURL)
         async let poseInAVPTask = fetchPoseInAVP(baseURL: baseURL)
         async let foundationPoseTask = fetchFoundationPose(baseURL: baseURL)
-        async let hsvTask = fetchHSVConfig(baseURL: baseURL)
         async let strideTask = fetchProcessingStride(baseURL: baseURL)
 
         do { self.health = try await healthTask } catch { errors.append(error.localizedDescription) }
@@ -154,7 +145,6 @@ final class DebugDashboardModel: ObservableObject {
             foundationPoseMatrix = fp.poseMatrix
             foundationPoseMessage = fp.message
         } catch { errors.append(error.localizedDescription) }
-        do { applyHSVConfig(try await hsvTask) } catch { errors.append(error.localizedDescription) }
         do { processingStride = try await strideTask } catch { errors.append(error.localizedDescription) }
 
         self.lastError = errors.isEmpty ? nil : errors.joined(separator: " | ")
@@ -171,7 +161,6 @@ final class DebugDashboardModel: ObservableObject {
         async let transformedDepthTask = fetchTransformedDepth(baseURL: baseURL)
         async let avpRSOverlayTask = fetchAVPRSOverlay(baseURL: baseURL)
         async let avpMaskTask = fetchAVPMask(baseURL: baseURL)
-        async let hsvTask = fetchHSVConfig(baseURL: baseURL)
         async let foundationPoseTask = fetchFoundationPose(baseURL: baseURL)
         async let strideTask = fetchProcessingStride(baseURL: baseURL)
 
@@ -187,7 +176,6 @@ final class DebugDashboardModel: ObservableObject {
         do { self.transformedDepthFrame = try await transformedDepthTask } catch { errors.append(error.localizedDescription) }
         do { self.avpRSOverlayFrame = try await avpRSOverlayTask } catch { errors.append(error.localizedDescription) }
         do { self.avpMaskFrame = try await avpMaskTask } catch { errors.append(error.localizedDescription) }
-        do { applyHSVConfig(try await hsvTask) } catch { errors.append(error.localizedDescription) }
         do {
             let fp = try await foundationPoseTask
             foundationPoseMatrix = fp.poseMatrix
@@ -242,15 +230,6 @@ private extension DebugDashboardModel {
     }
     struct ProcessingStrideResponse: Decodable {
         let stride: Int
-    }
-    struct HSVConfigResponse: Decodable {
-        let mean_h: Int
-        let mean_s: Int
-        let mean_v: Int
-        let std_h: Int
-        let std_s: Int
-        let std_v: Int
-        let enabled: Bool
     }
     struct ErrorResponse: Decodable { let error: String }
 
@@ -403,11 +382,6 @@ private extension DebugDashboardModel {
                           timestamp: ts)
     }
 
-    func fetchHSVConfig(baseURL: URL) async throws -> HSVConfigResponse {
-        let data = try await performRequest(baseURL: baseURL, path: "hsv_config")
-        return try JSONDecoder().decode(HSVConfigResponse.self, from: data)
-    }
-
     func performRequest(baseURL: URL, path: String) async throws -> Data {
         let url = baseURL.appendingPathComponent(path)
         return try await performRequest(url: url)
@@ -437,72 +411,6 @@ private extension DebugDashboardModel {
         }
         guard let data = Data(base64Encoded: base64Part, options: .ignoreUnknownCharacters) else { return nil }
         return UIImage(data: data)
-    }
-
-    func applyHSVConfig(_ config: HSVConfigResponse) {
-        suppressHSVPost = true
-        hsvMeanH = config.mean_h
-        hsvMeanS = config.mean_s
-        hsvMeanV = config.mean_v
-        hsvStdH = config.std_h
-        hsvStdS = config.std_s
-        hsvStdV = config.std_v
-        hsvMeanColor = colorFromOpenCVHSV(h: config.mean_h, s: config.mean_s, v: config.mean_v)
-        DispatchQueue.main.async { [weak self] in
-            self?.suppressHSVPost = false
-        }
-    }
-
-    func postHSVConfig(meanH: Int, meanS: Int, meanV: Int, stdH: Int, stdS: Int, stdV: Int) {
-        guard let baseURL else { return }
-        var request = URLRequest(url: baseURL.appendingPathComponent("hsv_config"))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let payload: [String: Any] = [
-            "mean_h": meanH,
-            "mean_s": meanS,
-            "mean_v": meanV,
-            "std_h": stdH,
-            "std_s": stdS,
-            "std_v": stdV
-        ]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
-        Task {
-            _ = try? await URLSession.shared.data(for: request)
-        }
-    }
-
-    func updateHSVFromColor(_ color: Color) {
-        guard !suppressHSVPost else { return }
-        guard let (h, s, v) = openCVHSV(from: color) else { return }
-        hsvMeanH = h
-        hsvMeanS = s
-        hsvMeanV = v
-        postHSVConfig(meanH: h, meanS: s, meanV: v, stdH: hsvStdH, stdS: hsvStdS, stdV: hsvStdV)
-    }
-
-    func updateHSVStd() {
-        guard !suppressHSVPost else { return }
-        postHSVConfig(meanH: hsvMeanH, meanS: hsvMeanS, meanV: hsvMeanV, stdH: hsvStdH, stdS: hsvStdS, stdV: hsvStdV)
-    }
-
-    func openCVHSV(from color: Color) -> (Int, Int, Int)? {
-        let uiColor = UIColor(color)
-        var h: CGFloat = 0
-        var s: CGFloat = 0
-        var v: CGFloat = 0
-        var a: CGFloat = 0
-        guard uiColor.getHue(&h, saturation: &s, brightness: &v, alpha: &a) else { return nil }
-        return (Int(round(h * 179.0)),
-                Int(round(s * 255.0)),
-                Int(round(v * 255.0)))
-    }
-
-    func colorFromOpenCVHSV(h: Int, s: Int, v: Int) -> Color {
-        let hue = Double(max(0, min(179, h))) / 179.0
-        let sat = Double(max(0, min(255, s))) / 255.0
-        let val = Double(max(0, min(255, v))) / 255.0
-        return Color(hue: hue, saturation: sat, brightness: val)
     }
 
     func postSaveNextFoundationPose(enabled: Bool) {
@@ -543,9 +451,9 @@ struct DebugDashboardView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     connectionStatus
+                    viewSelectionSection
                     matricesSection
                     processingSection
-                    hsvControlsSection
                     framesSection
                     logsSection
                     sensorSection
@@ -693,63 +601,53 @@ struct DebugDashboardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
-    private var hsvControlsSection: some View {
+    private var viewSelectionSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("HSV Filter Parameters")
+            Text("Live View Selection")
                 .font(.headline)
-            VStack(spacing: 8) {
-                HStack(spacing: 16) {
-                    ColorPicker("Mean color", selection: $model.hsvMeanColor, supportsOpacity: false)
-                        .onChange(of: model.hsvMeanColor) { _, newValue in
-                            model.updateHSVFromColor(newValue)
-                        }
-                    Text("mean HSV: \(model.hsvMeanH), \(model.hsvMeanS), \(model.hsvMeanV)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                HStack(spacing: 16) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Std H: \(model.hsvStdH)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Slider(value: Binding(
-                            get: { Double(model.hsvStdH) },
-                            set: { model.hsvStdH = Int($0) }
-                        ), in: 0...90, step: 1)
-                    }
-                    .onChange(of: model.hsvStdH) { _, _ in
-                        model.updateHSVStd()
-                    }
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Std S: \(model.hsvStdS)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Slider(value: Binding(
-                            get: { Double(model.hsvStdS) },
-                            set: { model.hsvStdS = Int($0) }
-                        ), in: 0...127, step: 1)
-                    }
-                    .onChange(of: model.hsvStdS) { _, _ in
-                        model.updateHSVStd()
-                    }
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Std V: \(model.hsvStdV)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Slider(value: Binding(
-                            get: { Double(model.hsvStdV) },
-                            set: { model.hsvStdV = Int($0) }
-                        ), in: 0...127, step: 1)
-                    }
-                    .onChange(of: model.hsvStdV) { _, _ in
-                        model.updateHSVStd()
-                    }
-                }
+            Picker("View", selection: $model.selectedView) {
+                Text("AVP ArUco Overlay").tag("overlay")
+                Text("AVP Raw (UxPlay)").tag("raw")
+                Text("AVP ROI Mask").tag("mask")
+                Text("RS RGB").tag("rs_rgb")
+                Text("RS Depth").tag("rs_depth")
+                Text("RS ArUco Overlay").tag("rs_aruco")
+                Text("RS ROI").tag("rs_roi")
+                Text("AVP + RS Pose Overlay").tag("avp_rs")
+                Text("RS Depth → AVP").tag("avp_depth")
+                Text("FP (AVP request) → AVP view").tag("fp_avp_on_avp")
+                Text("FP (AVP request) → RS view").tag("fp_avp_on_rs")
+                Text("FP (RS request) → AVP view").tag("fp_rs_on_avp")
+                Text("FP (RS request) → RS view").tag("fp_rs_on_rs")
             }
+            .pickerStyle(.menu)
+
+            Text("Selected: \(viewLabel(for: model.selectedView))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .padding()
         .background(.thinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func viewLabel(for view: String) -> String {
+        switch view {
+        case "overlay": return "AVP ArUco Overlay"
+        case "raw": return "AVP Raw (UxPlay)"
+        case "mask": return "AVP ROI Mask"
+        case "rs_rgb": return "RS RGB"
+        case "rs_depth": return "RS Depth"
+        case "rs_aruco": return "RS ArUco Overlay"
+        case "rs_roi": return "RS ROI"
+        case "avp_rs": return "AVP + RS Pose Overlay"
+        case "avp_depth": return "RS Depth → AVP"
+        case "fp_avp_on_avp": return "FP (AVP request) → AVP view"
+        case "fp_avp_on_rs": return "FP (AVP request) → RS view"
+        case "fp_rs_on_avp": return "FP (RS request) → AVP view"
+        case "fp_rs_on_rs": return "FP (RS request) → RS view"
+        default: return view
+        }
     }
 
     private var logsSection: some View {
