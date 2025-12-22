@@ -177,10 +177,10 @@ private final class UxplayFeedModel: ObservableObject {
             throw URLError(.badServerResponse)
         }
         let payload = try JSONDecoder().decode(AVPFrameResponse.self, from: data)
-        return decodeImage(from: payload.rgb)
+        return await decodeImage(from: payload.rgb)
     }
 
-    private func decodeImage(from dataURLString: String?) -> UIImage? {
+    private func decodeImage(from dataURLString: String?) async -> UIImage? {
         guard let dataURLString else { return nil }
         let base64Part: String
         if let commaIndex = dataURLString.firstIndex(of: ",") {
@@ -188,8 +188,12 @@ private final class UxplayFeedModel: ObservableObject {
         } else {
             base64Part = dataURLString
         }
-        guard let data = Data(base64Encoded: base64Part, options: .ignoreUnknownCharacters) else { return nil }
-        return UIImage(data: data)
+        return await Task.detached(priority: .utility) {
+            guard let data = Data(base64Encoded: base64Part, options: .ignoreUnknownCharacters) else {
+                return nil
+            }
+            return UIImage(data: data)
+        }.value
     }
 }
 

@@ -133,7 +133,14 @@ final class DebugDashboardModel: ObservableObject {
         } catch { errors.append(error.localizedDescription) }
         do { self.rsArucoFrame = try await rsArucoTask } catch { errors.append(error.localizedDescription) }
         do { self.avpFrame = try await avpLatestTask } catch { errors.append(error.localizedDescription) }
-        do { self.avpArucoFrame = try await avpArucoTask } catch { errors.append(error.localizedDescription) }
+        do {
+            let avpAruco = try await avpArucoTask
+            self.avpArucoFrame = avpAruco
+            var t = self.transforms
+            t.avpBoard = avpAruco.poseMatrix
+            self.transforms = t
+            self.avpBoardPose = avpAruco.poseMatrix
+        } catch { errors.append(error.localizedDescription) }
         do { self.avpRSOverlayFrame = try await avpRSOverlayTask } catch { errors.append(error.localizedDescription) }
         do { self.avpMaskFrame = try await avpMaskTask } catch { errors.append(error.localizedDescription) }
         do { self.transformedDepthFrame = try await transformedDepthTask } catch { errors.append(error.localizedDescription) }
@@ -246,8 +253,8 @@ private extension DebugDashboardModel {
         let data = try await performRequest(baseURL: baseURL, path: "get_rgbd_frame")
         let response = try JSONDecoder().decode(RGBDResponse.self, from: data)
         let ts = Date(timeIntervalSince1970: response.timestamp)
-        let rgbImage = decodeImage(from: response.rgb)
-        let depthImage = decodeImage(from: response.depth)
+        let rgbImage = await decodeImage(from: response.rgb)
+        let depthImage = await decodeImage(from: response.depth)
         let rgb = FrameState(image: rgbImage,
                              subtitle: "RGB",
                              details: "timestamp \(response.timestamp)",
@@ -267,7 +274,7 @@ private extension DebugDashboardModel {
         let ids = (response.marker_ids ?? []).map(String.init).joined(separator: ", ")
         let subtitle = "RS ArUco • \(markers) markers"
         let details = ids.isEmpty ? "No IDs" : ids
-        return FrameState(image: decodeImage(from: response.rgb),
+        return FrameState(image: await decodeImage(from: response.rgb),
                           subtitle: subtitle,
                           details: details,
                           timestamp: ts)
@@ -283,7 +290,7 @@ private extension DebugDashboardModel {
         let size = [response.width, response.height].compactMap { $0 }.map(String.init).joined(separator: "×")
         let subtitle = "Latest AVP frame"
         let details = [age, size].filter { !$0.isEmpty }.joined(separator: " • ")
-        return FrameState(image: decodeImage(from: response.rgb),
+        return FrameState(image: await decodeImage(from: response.rgb),
                           subtitle: subtitle,
                           details: details,
                           timestamp: ts)
@@ -299,7 +306,7 @@ private extension DebugDashboardModel {
         let ids = (response.marker_ids ?? []).map(String.init).joined(separator: ", ")
         let subtitle = "AVP ArUco • \(markers) markers"
         let details = ids.isEmpty ? "No IDs" : ids
-        return FrameState(image: decodeImage(from: response.rgb),
+        return FrameState(image: await decodeImage(from: response.rgb),
                           subtitle: subtitle,
                           details: details,
                           timestamp: ts,
@@ -311,7 +318,7 @@ private extension DebugDashboardModel {
         let response = try JSONDecoder().decode(AVPFrameResponse.self, from: data)
         let ts = response.timestamp.map { Date(timeIntervalSince1970: $0) }
         let subtitle = "AVP + RS Overlay"
-        return FrameState(image: decodeImage(from: response.rgb),
+        return FrameState(image: await decodeImage(from: response.rgb),
                           subtitle: subtitle,
                           details: "",
                           timestamp: ts)
@@ -322,7 +329,7 @@ private extension DebugDashboardModel {
         let response = try JSONDecoder().decode(AVPFrameResponse.self, from: data)
         let ts = response.timestamp.map { Date(timeIntervalSince1970: $0) }
         let subtitle = "AVP Mask"
-        return FrameState(image: decodeImage(from: response.rgb),
+        return FrameState(image: await decodeImage(from: response.rgb),
                           subtitle: subtitle,
                           details: "",
                           timestamp: ts)
@@ -376,7 +383,7 @@ private extension DebugDashboardModel {
         let depthRange = [response.min_depth, response.max_depth].compactMap { $0 }.map { String(format: "%.2fm", $0) }.joined(separator: " - ")
         let subtitle = "Transformed Depth"
         let details = [transformedInfo, depthRange].filter { !$0.isEmpty }.joined(separator: " • ")
-        return FrameState(image: decodeImage(from: response.depth_colormap),
+        return FrameState(image: await decodeImage(from: response.depth_colormap),
                           subtitle: subtitle,
                           details: details,
                           timestamp: ts)
@@ -401,7 +408,7 @@ private extension DebugDashboardModel {
         return data
     }
 
-    func decodeImage(from dataURLString: String?) -> UIImage? {
+    func decodeImage(from dataURLString: String?) async -> UIImage? {
         guard let dataURLString else { return nil }
         let base64Part: String
         if let commaIndex = dataURLString.firstIndex(of: ",") {
@@ -409,8 +416,12 @@ private extension DebugDashboardModel {
         } else {
             base64Part = dataURLString
         }
-        guard let data = Data(base64Encoded: base64Part, options: .ignoreUnknownCharacters) else { return nil }
-        return UIImage(data: data)
+        return await Task.detached(priority: .utility) {
+            guard let data = Data(base64Encoded: base64Part, options: .ignoreUnknownCharacters) else {
+                return nil
+            }
+            return UIImage(data: data)
+        }.value
     }
 
     func postSaveNextFoundationPose(enabled: Bool) {

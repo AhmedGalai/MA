@@ -26,6 +26,7 @@ final class ArucoStreamModel: ObservableObject {
     private let calibrationManager: CalibrationManager
 
     private var pollTask: Task<Void, Never>?
+    private var decodeTask: Task<Void, Never>?
     
     init(calibrationManager: CalibrationManager) {
         self.calibrationManager = calibrationManager
@@ -43,6 +44,8 @@ final class ArucoStreamModel: ObservableObject {
     func stopStreaming() {
         pollTask?.cancel()
         pollTask = nil
+        decodeTask?.cancel()
+        decodeTask = nil
         status = "Stopped"
     }
 
@@ -72,11 +75,17 @@ final class ArucoStreamModel: ObservableObject {
     }
 
     private func apply(_ payload: ArucoAPIResponse) {
-        if let dataURL = payload.rgb,
-           let image = Self.decodeImage(dataURL) {
-            annotatedImage = image
-            if let ts = payload.timestamp {
-                lastTimestamp = Date(timeIntervalSince1970: ts)
+        if let dataURL = payload.rgb {
+            decodeTask?.cancel()
+            decodeTask = Task.detached(priority: .utility) { [weak self] in
+                let image = Self.decodeImage(dataURL)
+                await MainActor.run {
+                    guard let self else { return }
+                    self.annotatedImage = image
+                    if let ts = payload.timestamp {
+                        self.lastTimestamp = Date(timeIntervalSince1970: ts)
+                    }
+                }
             }
         }
 

@@ -1889,6 +1889,16 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
     @app.route("/get_transformation", methods=["GET"])
     def get_transformation():
         T_avp_rs = _get_T_avp_rs()
+        T_world_rs = None
+        T_world_avp = None
+        with coord_lock:
+            if coordinate_manager is not None:
+                try:
+                    T_world_rs = coordinate_manager.get_T_world_rs()
+                    T_world_avp = coordinate_manager.get_T_world_avp()
+                except Exception:
+                    T_world_rs = None
+                    T_world_avp = None
         with avp_pose_lock:
             T_avp_board = avp_pose_latest.get("pose_matrix")
         with rs_aruco_lock:
@@ -1898,6 +1908,8 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
         return jsonify(
             {
                 "T_avp_rs": None if T_avp_rs is None else T_avp_rs.tolist(),
+                "T_world_rs": None if T_world_rs is None else T_world_rs.tolist(),
+                "T_world_avp": None if T_world_avp is None else T_world_avp.tolist(),
                 "T_avp_board": None if T_avp_board is None else T_avp_board.tolist(),
                 "T_rs_board": None if T_rs_board is None else T_rs_board.tolist(),
                 "calibrated": calibrated,
