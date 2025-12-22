@@ -48,55 +48,77 @@ def _encode_image_base64(img: np.ndarray, format: str = '.jpg') -> str:
         return ""
 
 
-def _encode_depth_as_png(depth: np.ndarray) -> str:
+# def _encode_depth_as_png(depth: np.ndarray) -> str:
+#     """
+#     Convert depth map to disparity and encode as base64 PNG.
+
+#     Converts depth values (in meters) to disparity using the formula:
+#     disparity = 1.0 / (depth + 1e-6)
+
+#     Then normalizes to 0-255 range and encodes as PNG for lossless compression.
+
+#     Args:
+#         depth: Depth map (HxW float32 in meters)
+
+#     Returns:
+#         Base64 encoded PNG string with data URI prefix
+#     """
+#     try:
+#         # Ensure depth is float32
+#         depth = depth.astype(np.float32)
+
+#         # Compute disparity: 1 / depth (with small epsilon to avoid division by zero)
+#         disparity = 1.0 / (depth + 1e-6)
+
+#         # Replace inf values with 0
+#         disparity[np.isinf(disparity)] = 0
+
+#         # Normalize to 0-255 range
+#         disparity_min = np.min(disparity[disparity > 0]) if np.any(disparity > 0) else 1.0
+#         disparity_max = np.max(disparity)
+
+#         if disparity_max - disparity_min < 1e-6:
+#             # All values are essentially the same
+#             disparity_normalized = np.zeros_like(disparity, dtype=np.uint8)
+#         else:
+#             disparity_normalized = (
+#                 (disparity - disparity_min) / (disparity_max - disparity_min) * 255
+#             ).astype(np.uint8)
+
+#         # Encode as PNG without .tobytes() and without data URI prefix
+#         success, encoded = cv2.imencode('.png', disparity_normalized)
+#         if not success:
+#             logger.error("Failed to encode depth as PNG")
+#             return ""
+
+#         img_base64 = base64.b64encode(encoded).decode('utf-8')
+#         return img_base64
+
+#     except Exception as e:
+#         logger.error(f"Error encoding depth: {e}")
+#         return ""
+
+def _encode_depth_as_png_mm(depth_m: np.ndarray) -> str:
     """
-    Convert depth map to disparity and encode as base64 PNG.
-
-    Converts depth values (in meters) to disparity using the formula:
-    disparity = 1.0 / (depth + 1e-6)
-
-    Then normalizes to 0-255 range and encodes as PNG for lossless compression.
-
-    Args:
-        depth: Depth map (HxW float32 in meters)
-
-    Returns:
-        Base64 encoded PNG string with data URI prefix
+    Encode depth (meters float32) as 16-bit PNG in millimeters.
+    0 = invalid.
     """
     try:
-        # Ensure depth is float32
-        depth = depth.astype(np.float32)
+        d = depth_m.astype(np.float32)
+        d = np.nan_to_num(d, nan=0.0, posinf=0.0, neginf=0.0)
 
-        # Compute disparity: 1 / depth (with small epsilon to avoid division by zero)
-        disparity = 1.0 / (depth + 1e-6)
+        depth_mm = (d * 1000.0).round().astype(np.uint16)
+        # keep zeros as invalid
 
-        # Replace inf values with 0
-        disparity[np.isinf(disparity)] = 0
-
-        # Normalize to 0-255 range
-        disparity_min = np.min(disparity[disparity > 0]) if np.any(disparity > 0) else 1.0
-        disparity_max = np.max(disparity)
-
-        if disparity_max - disparity_min < 1e-6:
-            # All values are essentially the same
-            disparity_normalized = np.zeros_like(disparity, dtype=np.uint8)
-        else:
-            disparity_normalized = (
-                (disparity - disparity_min) / (disparity_max - disparity_min) * 255
-            ).astype(np.uint8)
-
-        # Encode as PNG without .tobytes() and without data URI prefix
-        success, encoded = cv2.imencode('.png', disparity_normalized)
+        success, encoded = cv2.imencode('.png', depth_mm)  # 16-bit png
         if not success:
-            logger.error("Failed to encode depth as PNG")
+            logger.error("Failed to encode depth as 16-bit PNG")
             return ""
-
-        img_base64 = base64.b64encode(encoded).decode('utf-8')
-        return img_base64
-
+        return base64.b64encode(encoded).decode('utf-8')
     except Exception as e:
         logger.error(f"Error encoding depth: {e}")
         return ""
+
 
 
 def _encode_mesh_base64(mesh_path: str) -> str:
@@ -177,13 +199,17 @@ def estimate_pose(
 
         # Encode images and mesh
         logger.debug("Encoding RGB image...")
-        rgb_b64 = _encode_image_base64(rgb, format='.jpg')
+        # rgb_b64 = _encode_image_base64(rgb, format='.jpg')
+        rgb_b64 = _encode_image_base64(rgb, format='.png')
+
         if not rgb_b64:
             logger.error("Failed to encode RGB image")
             return None
 
         logger.debug("Encoding depth map...")
-        depth_b64 = _encode_depth_as_png(depth)
+        # depth_b64 = _encode_depth_as_png(depth)
+        depth_b64 = _encode_depth_as_png_mm(depth)
+
         if not depth_b64:
             logger.error("Failed to encode depth map")
             return None

@@ -62,7 +62,6 @@ logger = logging.getLogger("basic_main_api_with_uxplay")
 # Model selection (VisionOS UI)
 # -----------------------------
 selected_model = None
-
 # -----------------------------
 # Head pose storage (from visionOS)
 # -----------------------------
@@ -116,9 +115,9 @@ foundationpose_latest = {
     "success": False,
 }
 
-# replace:
-# foundationpose_save_next = False
-# foundationpose_save_lock = threading.Lock()
+
+foundationpose_pair_lock = threading.Lock()
+foundationpose_pair_id: Optional[str] = None
 
 foundationpose_save_lock = threading.Lock()
 foundationpose_save_pair = {
@@ -128,6 +127,16 @@ foundationpose_save_pair = {
     "need_rs": False,
     "armed_time": None,
 }
+
+def _rs_depth_alignment_ok(latest: Dict[str, Any]) -> Tuple[bool, str]:
+    rgb = latest.get("rgb")
+    depth = latest.get("depth")
+    if rgb is None or depth is None:
+        return False, "missing rgb/depth"
+    if depth.shape[:2] != rgb.shape[:2]:
+        return False, f"shape mismatch depth={depth.shape} rgb={rgb.shape}"
+    return True, "ok"
+
 
 def _arm_save_pair() -> Dict[str, Any]:
     with foundationpose_save_lock:
@@ -951,13 +960,33 @@ def _get_selected_model() -> str:
     return CONFIG["processing"]["default_model"]
 
 
-def _consume_save_next_foundationpose() -> bool:
-    global foundationpose_save_next
+# def _consume_save_next_foundationpose() -> bool:
+#     global foundationpose_save_next
+#     with foundationpose_save_lock:
+#         if foundationpose_save_next:
+#             foundationpose_save_next = False
+#             return True
+#     return False
+
+
+def _consume_save_next_foundationpose_pair_id() -> Optional[str]:
+    """
+    Arms saving for exactly one cycle. Returns a shared pair_id for both
+    RS and AVP saves. Consumed once.
+    """
+    global foundationpose_save_next, foundationpose_pair_id
     with foundationpose_save_lock:
-        if foundationpose_save_next:
-            foundationpose_save_next = False
-            return True
-    return False
+        if not foundationpose_save_next:
+            return None
+        foundationpose_save_next = False
+
+    # Generate a new pair id each time the button is clicked
+    with foundationpose_pair_lock:
+        if foundationpose_pair_id is None:
+            foundationpose_pair_id = time.strftime("%Y%m%d_%H%M%S") + f"_{int(time.time()*1000)%1000:03d}"
+        pid = foundationpose_pair_id
+        foundationpose_pair_id = None
+        return pid
 
 
 def _get_processing_stride() -> int:
@@ -1341,28 +1370,44 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
     #         foundationpose_save_next = enabled
     #     return jsonify({"enabled": foundationpose_save_next}), 200
 
+    # @app.route("/foundationpose_save_next", methods=["GET", "POST"])
+    # def foundationpose_save_next_route():
+    #     if request.method == "GET":
+    #         return jsonify(_get_save_pair_state()), 200
+
+    #     # POST
+    #     data = request.get_json(silent=True) or {}
+    #     enabled = bool(data.get("enabled", False))
+    #     if enabled:
+    #         st = _arm_save_pair()
+    #         return jsonify({"armed": True, **st}), 200
+    #     else:
+    #         # disarm
+    #         with foundationpose_save_lock:
+    #             foundationpose_save_pair.update({
+    #                 "armed": False,
+    #                 "capture_id": None,
+    #                 "need_avp": False,
+    #                 "need_rs": False,
+    #                 "armed_time": None,
+    #             })
+    #         return jsonify(_get_save_pair_state()), 200
+
     @app.route("/foundationpose_save_next", methods=["GET", "POST"])
     def foundationpose_save_next_route():
+        global foundationpose_save_next, foundationpose_pair_id
         if request.method == "GET":
-            return jsonify(_get_save_pair_state()), 200
+            with foundationpose_save_lock:
+                return jsonify({"enabled": foundationpose_save_next}), 200
 
-        # POST
         data = request.get_json(silent=True) or {}
         enabled = bool(data.get("enabled", False))
-        if enabled:
-            st = _arm_save_pair()
-            return jsonify({"armed": True, **st}), 200
-        else:
-            # disarm
-            with foundationpose_save_lock:
-                foundationpose_save_pair.update({
-                    "armed": False,
-                    "capture_id": None,
-                    "need_avp": False,
-                    "need_rs": False,
-                    "armed_time": None,
-                })
-            return jsonify(_get_save_pair_state()), 200
+        with foundationpose_save_lock:
+            foundationpose_save_next = enabled
+        with foundationpose_pair_lock:
+            foundationpose_pair_id = time.strftime("%Y%m%d_%H%M%S") + f"_{int(time.time()*1000)%1000:03d}" if enabled else None
+        return jsonify({"enabled": foundationpose_save_next, "pair_id": foundationpose_pair_id}), 200
+
 
 
     @app.route("/rs_roi_config", methods=["GET", "POST"])
