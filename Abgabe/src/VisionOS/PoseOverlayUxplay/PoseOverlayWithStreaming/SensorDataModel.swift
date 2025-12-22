@@ -11,6 +11,7 @@ final class SensorDataModel: ObservableObject {
     @Published var headOrientation: simd_quatd = simd_quatd(ix: 0, iy: 0, iz: 0, r: 1)
     @Published var headEulerDegrees: SIMD3<Double> = .zero
     @Published var lastPoseUpdate: Date = .distantPast
+    @Published private(set) var latestDeviceTransform: simd_float4x4?
 
     @Published var userAcceleration: CMAcceleration = .init()
     @Published var rotationRate: CMRotationRate = .init()
@@ -72,6 +73,7 @@ final class SensorDataModel: ObservableObject {
         updateTimer = nil
         motionManager.stopDeviceMotionUpdates()
         statusMessage = "Stopped"
+        latestDeviceTransform = nil
     }
 
     // MARK: - ARKit Tracking (visionOS)
@@ -178,6 +180,7 @@ final class SensorDataModel: ObservableObject {
             self.headOrientation = orientationD
             let euler = Self.eulerDegrees(from: orientationD)
             self.headEulerDegrees = euler
+            self.latestDeviceTransform = transform
             self.lastPoseUpdate = Date()
             self.lastMotionUpdate = Date()
             self.frameCount += 1  // Increment frame counter for visual feedback

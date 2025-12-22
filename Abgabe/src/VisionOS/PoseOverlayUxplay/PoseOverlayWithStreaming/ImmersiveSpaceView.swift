@@ -62,13 +62,11 @@ struct ImmersiveSpaceView: View {
     private func updateBoardAxes() {
         guard let boardAxes else { return }
 
-        // Query device anchor for camera-to-world transform
-        guard let deviceAnchor = sensorModel.worldTracking.queryDeviceAnchor(
-            atTimestamp: CACurrentMediaTime()
-        ) else {
+        // Use cached device transform from the sensor model to avoid re-querying ARKit here.
+        guard let deviceTransform = sensorModel.latestDeviceTransform else {
             boardAxes.isEnabled = false
             if frameCounter % 60 == 0 {
-                logs.add("⚠️ Cannot query device anchor")
+                logs.add("⚠️ Waiting for device anchor")
             }
             return
         }
@@ -78,14 +76,14 @@ struct ImmersiveSpaceView: View {
             // ArUco detected - compute and store device-to-aruco transform for future tracking
             let T_device_aruco = CameraTransformUtils.computeArucoToDeviceTransform(
                 cameraPose: T_camera_aruco,
-                deviceAnchor: deviceAnchor
+                deviceTransform: deviceTransform
             )
             arucoStream.deviceToArucoTransform = T_device_aruco
 
             // Transform to world space
             let T_world_aruco = CameraTransformUtils.arucoPoseToWorld(
                 cameraPose: T_camera_aruco,
-                deviceAnchor: deviceAnchor
+                deviceTransform: deviceTransform
             )
 
             boardAxes.isEnabled = true
@@ -101,7 +99,7 @@ struct ImmersiveSpaceView: View {
             // ArUco not visible - use continuous tracking with stored transform
             let T_world_aruco = CameraTransformUtils.estimateArucoWorldPose(
                 deviceToAruco: T_device_aruco,
-                deviceAnchor: deviceAnchor
+                deviceTransform: deviceTransform
             )
 
             boardAxes.isEnabled = true

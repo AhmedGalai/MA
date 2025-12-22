@@ -26,6 +26,12 @@ enum CameraTransformUtils {
         return T_world_device * T_device_camera
     }
 
+    /// Compute camera-to-world transform from a cached device transform.
+    static func cameraToWorldTransform(from deviceTransform: simd_float4x4) -> simd_float4x4 {
+        let T_device_camera = simd_float4x4(translation: estimatedCameraOffset)
+        return deviceTransform * T_device_camera
+    }
+
     /// Transform ArUco camera-space pose to world space
     /// - Parameters:
     ///   - cameraPose: ArUco pose in camera frame (from OpenCV → RealityKit converted)
@@ -36,6 +42,15 @@ enum CameraTransformUtils {
         deviceAnchor: DeviceAnchor
     ) -> simd_float4x4 {
         let T_world_camera = cameraToWorldTransform(from: deviceAnchor)
+        return T_world_camera * cameraPose
+    }
+
+    /// Transform ArUco camera-space pose to world space with cached device transform.
+    static func arucoPoseToWorld(
+        cameraPose: simd_float4x4,
+        deviceTransform: simd_float4x4
+    ) -> simd_float4x4 {
+        let T_world_camera = cameraToWorldTransform(from: deviceTransform)
         return T_world_camera * cameraPose
     }
 
@@ -59,6 +74,16 @@ enum CameraTransformUtils {
         return T_device_world * T_world_aruco
     }
 
+    /// Compute the relative transform from ArUco to device using cached transform.
+    static func computeArucoToDeviceTransform(
+        cameraPose: simd_float4x4,
+        deviceTransform: simd_float4x4
+    ) -> simd_float4x4 {
+        let T_world_aruco = arucoPoseToWorld(cameraPose: cameraPose, deviceTransform: deviceTransform)
+        let T_device_world = deviceTransform.inverse
+        return T_device_world * T_world_aruco
+    }
+
     /// Estimate ArUco world pose from stored device-relative transform
     /// Used for continuous tracking when marker is not visible
     /// - Parameters:
@@ -71,5 +96,13 @@ enum CameraTransformUtils {
     ) -> simd_float4x4 {
         let T_world_device = deviceAnchor.originFromAnchorTransform
         return T_world_device * deviceToAruco
+    }
+
+    /// Estimate ArUco world pose using cached device transform.
+    static func estimateArucoWorldPose(
+        deviceToAruco: simd_float4x4,
+        deviceTransform: simd_float4x4
+    ) -> simd_float4x4 {
+        return deviceTransform * deviceToAruco
     }
 }

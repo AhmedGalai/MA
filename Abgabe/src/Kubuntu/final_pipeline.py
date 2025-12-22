@@ -627,6 +627,19 @@ def _encode_jpeg_b64(frame_bgr: np.ndarray, quality: int = 85) -> str:
     return base64.b64encode(buf).decode("utf-8")
 
 
+def _decode_jpeg_b64(data_url: Optional[str]) -> Optional[np.ndarray]:
+    if not data_url:
+        return None
+    try:
+        if "," in data_url:
+            data_url = data_url.split(",", 1)[1]
+        data = base64.b64decode(data_url)
+        arr = np.frombuffer(data, dtype=np.uint8)
+        return cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    except Exception:
+        return None
+
+
 # -----------------------------
 # ArUco processing (rate-limited)
 # -----------------------------
@@ -1685,13 +1698,22 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
         if frame is None:
             return jsonify({"error": "No AVP frame yet"}), 503
         out = frame.copy()
+        has_avp_overlay = False
+
+        try:
+            annotated = _decode_jpeg_b64(processor.get_aruco().get("rgb"))
+            if annotated is not None:
+                out = annotated
+                has_avp_overlay = True
+        except Exception:
+            pass
         K_avp = processor.K
         dist = processor.dist
 
         with avp_pose_lock:
             avp_pose = avp_pose_latest.get("pose_matrix")
 
-        if avp_pose is not None:
+        if avp_pose is not None and not has_avp_overlay:
             rvec, tvec = _T_to_rvec_tvec(avp_pose)
             out = _draw_axes(out, rvec, tvec, K_avp, dist, processor.cfg.axis_length_m, label="Aruco")
 
@@ -2231,6 +2253,9 @@ wire();
                     if out is None:
                         time.sleep(0.02)
                         continue
+                    annotated = _decode_jpeg_b64(processor.get_aruco().get("rgb"))
+                    if annotated is not None:
+                        out = annotated
                     with avp_pose_lock:
                         avp_pose = avp_pose_latest.get("pose_matrix")
                     if avp_pose is not None:
@@ -2279,6 +2304,9 @@ wire();
                     if out is None:
                         time.sleep(0.02)
                         continue
+                    annotated = _decode_jpeg_b64(processor.get_aruco().get("rgb"))
+                    if annotated is not None:
+                        out = annotated
                     with foundationpose_lock:
                         fp_pose = foundationpose_latest.get("pose_matrix")
                     if fp_pose is not None:
@@ -2294,6 +2322,9 @@ wire();
                     if out is None:
                         time.sleep(0.02)
                         continue
+                    annotated = _decode_jpeg_b64(processor.get_aruco().get("rgb"))
+                    if annotated is not None:
+                        out = annotated
                     # Need to transform RS pose to AVP frame
                     with foundationpose_rs_lock:
                         fp_rs_pose = foundationpose_rs_latest.get("pose_matrix")
@@ -2317,7 +2348,9 @@ wire();
                         time.sleep(0.05)
                         continue
                     latest = rs_capture.get_latest()
-                    out = latest.get("rgb")
+                    with rs_aruco_lock:
+                        rs_overlay = rs_aruco_latest.get("overlay")
+                    out = rs_overlay if rs_overlay is not None else latest.get("rgb")
                     K_rs = latest.get("K")
                     if out is None or K_rs is None:
                         time.sleep(0.02)
@@ -2350,7 +2383,9 @@ wire();
                         time.sleep(0.05)
                         continue
                     latest = rs_capture.get_latest()
-                    out = latest.get("rgb")
+                    with rs_aruco_lock:
+                        rs_overlay = rs_aruco_latest.get("overlay")
+                    out = rs_overlay if rs_overlay is not None else latest.get("rgb")
                     K_rs = latest.get("K")
                     if out is None or K_rs is None:
                         time.sleep(0.02)
