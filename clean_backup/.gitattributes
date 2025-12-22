@@ -1,3 +1,0 @@
-# Force LF line endings for shell scripts to prevent Docker execution issues
-*.sh text eol=lf
-*.py text eol=lf
