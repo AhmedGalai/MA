@@ -740,9 +740,11 @@ class ArucoProcessor:
         if hasattr(cv2.aruco, "estimatePoseBoard"):
             try:
                 # returns: (retval, rvec, tvec)
-                return cv2.aruco.estimatePoseBoard(
+                retval, rvec, tvec = cv2.aruco.estimatePoseBoard(
                     corners, ids, self.board, self.K, self.dist, None, None
                 )
+                if retval and rvec is not None and tvec is not None:
+                    return True, rvec, tvec
             except Exception:
                 pass
 
@@ -828,6 +830,16 @@ class ArucoProcessor:
                             avp_pose_latest["rvec"] = rvec.reshape(3).copy()
                             avp_pose_latest["tvec"] = tvec.reshape(3).copy()
                             avp_pose_latest["timestamp"] = ts
+
+                        annotated = _draw_axes(
+                            annotated,
+                            rvec,
+                            tvec,
+                            self.K,
+                            self.dist,
+                            self.cfg.axis_length_m,
+                            label="AVP ArUco",
+                        )
 
                         # Update coordinate_manager with T_world_avp (not T_avp_board!)
                         # T_world_avp = T_world_rs @ T_rs_board @ inv(T_avp_board)

@@ -112,17 +112,13 @@ final class SensorDataModel: ObservableObject {
                 NSLog("📱 [SensorDataModel] ⚠️ WorldTracking not running yet: \(worldTracking.state), continuing anyway...")
             }
 
-            // Set up timer to poll device anchor at 60Hz even if paused
-            // It may start working once the app is active
-            await MainActor.run {
-                self.updateTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-                    Task { @MainActor in
-                        await self?.updateFromARKit()
-                    }
-                }
-                self.statusMessage = "Tracking head pose"
-                NSLog("📱 [SensorDataModel] ✓ Started 60Hz polling timer")
+            // Set up timer to poll device anchor at 60Hz even if paused.
+            // Keep the callback lightweight to avoid UI stalls.
+            self.updateTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+                self?.updateFromARKit()
             }
+            self.statusMessage = "Tracking head pose"
+            NSLog("📱 [SensorDataModel] ✓ Started 60Hz polling timer")
 
         } catch {
             NSLog("📱 [SensorDataModel] ❌ ARKit error: \(error.localizedDescription)")
@@ -132,11 +128,11 @@ final class SensorDataModel: ObservableObject {
         }
     }
 
-    private func updateFromARKit() async {
+    private func updateFromARKit() {
         // Query device anchor for current head pose
         guard let deviceAnchor = worldTracking.queryDeviceAnchor(atTimestamp: CACurrentMediaTime()) else {
             // Log first failure
-            if await MainActor.run(body: { self.lastPoseUpdate == .distantPast }) {
+            if self.lastPoseUpdate == .distantPast {
                 NSLog("📱 [SensorDataModel] ❌ queryDeviceAnchor returned nil (tracking not ready?)")
             }
             return
@@ -168,36 +164,33 @@ final class SensorDataModel: ObservableObject {
             r: Double(orientation.real)
         )
 
-        // Update published properties on main actor
-        await MainActor.run {
-            // First update - log it
-            if self.lastPoseUpdate == .distantPast {
-                NSLog("📱 [SensorDataModel] ✓✓✓ RECEIVING ARKit UPDATES! ✓✓✓")
-                NSLog("📱 [SensorDataModel] Position: [\(position.x), \(position.y), \(position.z)]")
-            }
-
-            self.headPosition = position
-            self.headOrientation = orientationD
-            let euler = Self.eulerDegrees(from: orientationD)
-            self.headEulerDegrees = euler
-            self.latestDeviceTransform = transform
-            self.lastPoseUpdate = Date()
-            self.lastMotionUpdate = Date()
-            self.frameCount += 1  // Increment frame counter for visual feedback
-
-            // Log every 60 frames (1 second at 60Hz)
-            if self.frameCount % 60 == 0 {
-                NSLog("📱 [SensorDataModel] Frame \(self.frameCount) - Pos: [\(String(format: "%.3f", position.x)), \(String(format: "%.3f", position.y)), \(String(format: "%.3f", position.z))]")
-            }
-
-            // Simulate device motion data from head movement (for compatibility)
-            // Note: These are approximations since ARKit doesn't provide raw IMU data
-            self.userAcceleration = CMAcceleration(x: 0, y: 0, z: 0)
-            self.rotationRate = CMRotationRate(x: 0, y: 0, z: 0)
-            self.gravity = CMAcceleration(x: 0, y: -1, z: 0) // Simulated gravity
-
-            self.queueHeadPoseUpload(position: position, eulerDegrees: euler, orientation: orientationD)
+        // First update - log it
+        if self.lastPoseUpdate == .distantPast {
+            NSLog("📱 [SensorDataModel] ✓✓✓ RECEIVING ARKit UPDATES! ✓✓✓")
+            NSLog("📱 [SensorDataModel] Position: [\(position.x), \(position.y), \(position.z)]")
         }
+
+        self.headPosition = position
+        self.headOrientation = orientationD
+        let euler = Self.eulerDegrees(from: orientationD)
+        self.headEulerDegrees = euler
+        self.latestDeviceTransform = transform
+        self.lastPoseUpdate = Date()
+        self.lastMotionUpdate = Date()
+        self.frameCount += 1  // Increment frame counter for visual feedback
+
+        // Log every 60 frames (1 second at 60Hz)
+        if self.frameCount % 60 == 0 {
+            NSLog("📱 [SensorDataModel] Frame \(self.frameCount) - Pos: [\(String(format: "%.3f", position.x)), \(String(format: "%.3f", position.y)), \(String(format: "%.3f", position.z))]")
+        }
+
+        // Simulate device motion data from head movement (for compatibility)
+        // Note: These are approximations since ARKit doesn't provide raw IMU data
+        self.userAcceleration = CMAcceleration(x: 0, y: 0, z: 0)
+        self.rotationRate = CMRotationRate(x: 0, y: 0, z: 0)
+        self.gravity = CMAcceleration(x: 0, y: -1, z: 0) // Simulated gravity
+
+        self.queueHeadPoseUpload(position: position, eulerDegrees: euler, orientation: orientationD)
     }
 
     // MARK: - CoreMotion (iOS fallback)
