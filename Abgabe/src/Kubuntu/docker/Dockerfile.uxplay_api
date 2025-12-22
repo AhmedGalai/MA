@@ -1,0 +1,74 @@
+FROM ubuntu:22.04
+
+# Prevent interactive prompts during build
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    pkg-config \
+    libavahi-compat-libdnssd-dev \
+    libplist-dev \
+    libssl-dev \
+    libusb-1.0-0 \
+    libudev1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    libgstreamer1.0-dev \
+    libgstreamer-plugins-base1.0-dev \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    gstreamer1.0-libav \
+    gstreamer1.0-tools \
+    gstreamer1.0-x \
+    avahi-daemon \
+    avahi-utils \
+    dbus \
+    python3 \
+    python3-pip \
+    python3-dev \
+    wget \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build and install UxPlay from source
+WORKDIR /tmp
+RUN git clone https://github.com/FDH2/UxPlay.git && \
+    cd UxPlay && \
+    mkdir build && \
+    cd build && \
+    cmake .. && \
+    make && \
+    make install && \
+    ldconfig && \
+    cd / && \
+    rm -rf /tmp/UxPlay
+
+# Install Python dependencies
+WORKDIR /app
+COPY requirements.txt /app/requirements.txt
+RUN pip3 install --no-cache-dir -r /app/requirements.txt
+
+# Copy application files
+COPY . /app
+
+# Configure avahi-daemon to work in Docker
+RUN mkdir -p /var/run/avahi-daemon /var/run/dbus && \
+    sed -i 's/rlimit-nproc=3/rlimit-nproc=8/' /etc/avahi/avahi-daemon.conf
+
+# Expose API + AirPlay ports
+EXPOSE 8000 7000 7001 6000 6001 5353/udp
+
+ENV PYTHONUNBUFFERED=1
+
+# Start script
+COPY docker/start_api.sh /app/start_api.sh
+RUN chmod +x /app/start_api.sh
+
+CMD ["/app/start_api.sh"]
