@@ -8,6 +8,7 @@
 \usepackage{listings}
 \usepackage{xcolor}
 \usepackage{float}
+\usepackage{booktabs}
 
 \pgfplotsset{compat=1.18}
 \geometry{margin=1in}
@@ -32,9 +33,9 @@
 % ============================================================
 \section{Introduction}
 
-This document presents the design, implementation, and evaluation of a system for estimating and visualizing the $6$D pose of a physical object in the AVP world coordinate system. The system integrates external RGB-D sensing, camera calibration, ArUco-based spatial registration, and learning-based pose estimation using FoundationPose, with an interactive visionOS user interface for configuration and visualization.
+This document presents the design, implementation, and evaluation of a system for estimating and visualizing the $6$D pose of a physical object in the Apple Vision Pro (AVP) world coordinate system. The system integrates external RGB-D sensing, camera calibration, ArUco-based spatial registration, and learning-based pose estimation using FoundationPose, with a visionOS user interface for configuration and visualization.
 
-A defining challenge of this project is the lack of direct access to AVP camera feeds. At the time of development, ADEP is the only supported mechanism for accessing AVP camera data. Since ADEP access is unavailable, the system must rely on external sensors and indirect reprojection into the AVP coordinate space. This constraint significantly influences the system architecture, calibration strategy, and evaluation methodology.
+A defining challenge of this project is the lack of direct access to AVP camera feeds under the standard Apple Developer Program (ADP). At the time of development, ADEP is the only supported mechanism for accessing AVP camera data. Since ADEP access is unavailable, the system relies on external RGB-D sensors and AirPlay mirroring (UxPlay) to obtain camera observations, followed by reprojection into the AVP coordinate space. This constraint shapes the system architecture, calibration strategy, and evaluation methodology.
 
 The document is structured as follows. Section~\ref{sec:design} describes the system design and explored alternatives. Section~\ref{sec:implementation} details the implementation of the final pipeline. Section~\ref{sec:evaluation} presents the evaluation strategy and results. The appendices provide the mathematical formulation, system diagrams, API documentation, usage instructions, AR interface description, and representative code listings.
 
@@ -59,12 +60,13 @@ The system is designed to satisfy the following objectives:
 The system is decomposed into the following core modules:
 
 \begin{itemize}
-    \item \textbf{RGB-D Acquisition}: External RealSense sensor
-    \item \textbf{RGB-D Alignment and Reprojection}
-    \item \textbf{Segmentation and Mask Generation}
-    \item \textbf{Pose Estimation (FoundationPose)}
-    \item \textbf{World Registration and Anchoring}
-    \item \textbf{visionOS User Interface}
+    \item \textbf{AirPlay RGB Acquisition}: UxPlay capture of mirrored AVP frames
+    \item \textbf{External RGB-D Acquisition}: Intel RealSense sensor
+    \item \textbf{RGB-D Alignment and Reprojection}: RealSense depth reprojected into the AVP view
+    \item \textbf{Segmentation and Mask Generation}: Normalized circular ROI masks
+    \item \textbf{Pose Estimation (FoundationPose)}: $6$D pose inference on RGB-D + mask
+    \item \textbf{World Registration}: ArUco-based calibration with continuous tracking
+    \item \textbf{visionOS User Interface}: configuration, monitoring, and overlay rendering
 \end{itemize}
 
 This modular structure allows intermediate results (e.g., camera-frame poses) to be evaluated independently of world-space visualization.
@@ -74,46 +76,30 @@ This modular structure allows intermediate results (e.g., camera-frame poses) to
 The lack of ADEP access prevents direct use of AVP camera streams and depth sensing. Table~\ref{tab:adep_blocked} summarizes features that are inaccessible.
 
 \begin{table}[H]
-\centering
-\begin{tabular}{|l|l|}
-\hline
-\textbf{Feature} & \textbf{Availability} \\
-\hline
-AVP RGB camera feed & Blocked (ADEP) \\
-AVP depth sensing & Blocked (ADEP) \\
-Camera intrinsics & Blocked (ADEP) \\
-Direct pixel-to-world mapping & Blocked (ADEP) \\
-Native occlusion reasoning & Blocked (ADEP) \\
-\hline
-\end{tabular}
-\caption{Features inaccessible due to lack of ADEP access.}
-\label{tab:adep_blocked}
+    \centering
+    \caption{Features inaccessible due to lack of ADEP access.}
+    \label{tab:adep_blocked}
+    \begin{tabular}{p{0.45\linewidth}p{0.45\linewidth}}
+        \toprule
+        \textbf{Feature} & \textbf{Availability} \\
+        \midrule
+        AVP RGB camera feed & Blocked (ADEP) \\
+        AVP depth sensing & Blocked (ADEP) \\
+        Camera intrinsics & Blocked (ADEP) \\
+        Direct pixel-to-world mapping & Blocked (ADEP) \\
+        Native occlusion reasoning & Blocked (ADEP) \\
+        \bottomrule
+    \end{tabular}
 \end{table}
 
-As a result, the system must use an external RGB-D sensor and perform multi-stage reprojection and manual world anchoring.
+As a result, the system must use an external RGB-D sensor and perform multi-stage reprojection with ArUco-based calibration and device-to-camera offset estimation.
 
 \subsection{Explored Alternative Approaches}
 
 Several alternative approaches were explored during the design phase.
 
 \paragraph{Monocular Depth Estimation}
-Transformer-based monocular depth estimation (AnyDepth v2) was evaluated as a potential replacement for external depth sensing.
-
-\begin{figure}[H]
-\centering
-\fbox{\includegraphics[width=0.8\textwidth]{placeholder_anydepth_output.pdf}}
-\caption{Placeholder output of AnyDepth v2 monocular depth estimation.}
-\end{figure}
-
-While visually plausible, monocular depth exhibited scale ambiguity and temporal instability when compared to RealSense depth.
-
-\begin{figure}[H]
-\centering
-\fbox{\includegraphics[width=0.8\textwidth]{placeholder_mde_error_vs_rs.pdf}}
-\caption{Placeholder comparison of monocular depth estimation error relative to RealSense depth.}
-\end{figure}
-
-This approach was therefore excluded from the final system.
+Transformer-based monocular depth estimation (AnyDepth v2) was evaluated as a potential replacement for external depth sensing. While visually plausible, monocular depth exhibited scale ambiguity and temporal instability when compared to RealSense depth. This approach was therefore excluded from the final system and retained only for offline experiments.
 
 \paragraph{ROI and Occlusion Handling}
 More complex segmentation strategies were explored, including freeform ROIs and active contour optimization. These methods increased interaction complexity without providing significant benefit, as FoundationPose can converge with very sparse valid pixels.
@@ -122,7 +108,7 @@ Temporal occlusion handling using Kalman filters and Gaussian processes was also
 
 \subsection{User-Centered Interaction Design}
 
-A core design decision was to prioritize usability. Object segmentation is controlled via simple disc-shaped ROIs and color sliders rather than freehand drawing. This reduces cognitive load and enables fast iteration during calibration and evaluation.
+A core design decision was to prioritize usability. Object segmentation is controlled via a simple disc-shaped ROI and a dedicated ROI overlay window rather than freehand drawing. This reduces cognitive load and enables fast iteration during calibration and evaluation.
 
 % ============================================================
 \section{Implementation}
@@ -130,32 +116,26 @@ A core design decision was to prioritize usability. Object segmentation is contr
 
 \subsection{Hardware and Software Environment}
 
-RGB-D data is acquired using a fixed RealSense sensor. The computer vision pipeline runs on a Kubuntu server using Docker containers. Development and debugging of the AR interface are performed on macOS using the visionOS simulator and virtual display.
+RGB-D data is acquired using a fixed Intel RealSense sensor. The computer vision pipeline runs on a Kubuntu server using Docker containers. Development and debugging of the AR interface are performed on macOS using Xcode and the visionOS simulator, and deployments are tested on the Apple Vision Pro headset.
 
-\begin{figure}[H]
-\centering
-\fbox{\includegraphics[width=0.85\textwidth]{placeholder_mac_virtual_display.pdf}}
-\caption{Placeholder macOS and visionOS development environment with virtual display.}
-\end{figure}
-
-FoundationPose inference is executed via a Dockerized API deployed on the Kubuntu server and developed by a colleague. This work integrates the API but does not claim authorship or modification of the FoundationPose implementation.
+FoundationPose inference is executed via a Dockerized API deployed on the Kubuntu server. This work integrates the API but does not claim authorship or modification of the FoundationPose implementation.
 
 \subsection{RGB-D Alignment and Reprojection}
 
 RealSense depth is first aligned to the RealSense color camera frame using the vendor SDK. After alignment, each depth pixel corresponds to a ray in the color camera frame and is back-projected using the color intrinsics.
 
-The aligned depth is then reprojected into the uxplay camera frame using a camera-to-camera transform estimated via ArUco markers. This yields an RGB-D representation in the uxplay view, which is required for the uxplay-based FoundationPose pipeline.
+The aligned depth is then reprojected into the AVP camera frame (captured via UxPlay) using a camera-to-camera transform estimated via ArUco markers. This yields an RGB-D representation in the AVP view, which is required for the AVP-based FoundationPose pipeline.
 
 \subsection{Segmentation and Mask Generation}
 
-Two segmentation strategies are implemented:
+Two ROI-based masking strategies are implemented:
 
 \begin{itemize}
-    \item \textbf{uxplay pipeline}: HSV-based masking within a disc-shaped ROI placed in the uxplay RGB view. The user selects a mean HSV color and tolerances via sliders, and a small ROI disc is positioned and scaled in the AR UI.
-    \item \textbf{RealSense reference pipeline}: Pure geometric disc ROI masking in the RealSense RGB view. A circular ROI is controlled via three sliders (center $x$, center $y$, radius), and the overlay is visualized in a debug RGB window.
+    \item \textbf{AVP pipeline}: A normalized circular ROI mask defined by \texttt{/avp\_roi\_config} (center $(c_x,c_y)$ and radius $r$ in normalized coordinates). The mask is applied directly in the AVP (UxPlay) image plane.
+    \item \textbf{RealSense reference pipeline}: A geometric circular ROI in the RealSense RGB view. The circle center and radius are controlled via \texttt{/rs\_roi\_config}, and the mask is visualized in the debug viewer.
 \end{itemize}
 
-The reference ROI is simpler and less sensitive to illumination, while the HSV mask allows isolating a colored disc or patch in the uxplay view.
+The AVP ROI mask is intentionally simple and robust to illumination changes. Color-based HSV segmentation and freeform ROIs were evaluated but removed due to interaction complexity and limited benefit for FoundationPose.
 
 \subsection{Pose Estimation}
 
@@ -169,13 +149,24 @@ Given aligned RGB-D data, camera intrinsics, a binary mask, and a selected PLY o
     \item Object mesh (PLY)
 \end{itemize}
 
-The output is a rigid transform $\mathbf{T}_{C \leftarrow O}$, where $C$ is either the RealSense or uxplay camera frame.
+The output is a rigid transform $\mathbf{T}_{C \leftarrow O}$, where $C$ is either the RealSense or AVP camera frame.
 
 \subsection{World Registration}
 
-ArUco markers placed in the scene are used to relate camera frames to the AVP world frame via a manually positioned world anchor (gizmo). The gizmo is placed so that its origin matches the physical marker center and its axes match the marker coordinate frame. The transform $\mathbf{T}_{W \leftarrow M}$ is thus defined by user adjustment.
+ArUco markers placed in the scene provide the spatial relationship between the AVP camera and the physical environment. When a marker is detected in the AVP camera frame, the pose $\mathbf{T}_{C \leftarrow M}$ is estimated via OpenCV. The AVP camera pose in world coordinates is computed using the ARKit device anchor and a calibrated camera offset:
+\[
+\mathbf{T}_{W \leftarrow C} = \mathbf{T}_{W \leftarrow D} \mathbf{T}_{D \leftarrow C},
+\]
+\[
+\mathbf{T}_{W \leftarrow M} = \mathbf{T}_{W \leftarrow C}\mathbf{T}_{C \leftarrow M}.
+\]
 
-When the marker is visible in uxplay, the camera pose in world coordinates is obtained from $\mathbf{T}_{W \leftarrow M}$ and the ArUco pose. When the marker is not visible, the system relies on a previously estimated head-to-uxplay transform $\mathbf{T}_{H \leftarrow UX}$, combined with the current head pose $\mathbf{T}_{W \leftarrow H}$, to approximate $\mathbf{T}_{W \leftarrow UX}$.
+For continuous tracking, the device-to-marker transform $\mathbf{T}_{D \leftarrow M}$ is stored when the marker is visible. If the marker is temporarily occluded, the system estimates the marker pose as
+\[
+\mathbf{T}_{W \leftarrow M} \approx \mathbf{T}_{W \leftarrow D} \mathbf{T}_{D \leftarrow M}.
+\]
+
+This approach removes the need for a manual gizmo anchor while keeping the marker pose stable under brief occlusions. A small camera offset calibration (in meters) is exposed in the Anchor Setup window to account for device-to-camera extrinsics.
 
 \subsection{visionOS Application}
 
@@ -184,13 +175,12 @@ The visionOS application provides configuration, debugging, and immersive visual
 \begin{itemize}
     \item API host and port configuration
     \item Object mesh selection
-    \item ROI center and radius control
-    \item HSV parameter adjustment for the uxplay pipeline
-    \item Toggling of immersive AR mode
+    \item ROI radius visualization and ROI window
+    \item Immersive space toggling
     \item Access to debug, help, and anchor setup windows
 \end{itemize}
 
-An immersive space displays world axes, the gizmo anchor, and the current object pose as coordinate frames and arrows.
+The immersive space displays world axes, the ArUco board axes, the RealSense camera pose, and the current object pose as coordinate frames and arrows.
 
 % ============================================================
 \section{Evaluation}
@@ -201,62 +191,32 @@ An immersive space displays world axes, the gizmo anchor, and the current object
 To isolate pose estimation accuracy from world alignment error, two pipelines are compared:
 
 \begin{enumerate}
-    \item \textbf{RS--FoundationPose (Reference)}: Pose estimated directly in the RealSense color frame using aligned RealSense RGB-D and a simple disc ROI in the RealSense view.
-    \item \textbf{RS--uxplay--FoundationPose (Proposed)}: Pose estimated in the uxplay camera frame using reprojected RGB-D and HSV-based ROI masking, then transformed back to the RealSense frame.
+    \item \textbf{RS--FoundationPose (Reference)}: Pose estimated directly in the RealSense color frame using aligned RealSense RGB-D and a circular ROI mask in the RealSense view.
+    \item \textbf{RS--AVP--FoundationPose (Evaluated)}: Pose estimated in the AVP camera frame using RealSense depth reprojected into the AVP view and a normalized AVP ROI mask, then transformed back to the RealSense frame.
 \end{enumerate}
 
-The RealSense-based pipeline serves as a reference due to its fixed geometry, native depth, and simple segmentation. For evaluation, the uxplay-based pose $\mathbf{T}_{UX \leftarrow O}$ is transformed into the RealSense frame using the camera-to-camera transform, yielding $\mathbf{T}^{\text{eval}}_{RS \leftarrow O}$. This is compared against $\mathbf{T}^{\text{ref}}_{RS \leftarrow O}$ from the reference pipeline.
+The RealSense-based pipeline serves as a reference due to its fixed geometry, native depth, and simple segmentation. For evaluation, the AVP-based pose $\mathbf{T}_{AVP \leftarrow O}$ is transformed into the RealSense frame using the camera-to-camera transform, yielding $\mathbf{T}^{\text{eval}}_{RS \leftarrow O}$. This is compared against $\mathbf{T}^{\text{ref}}_{RS \leftarrow O}$ from the reference pipeline. Paired requests are captured using \texttt{/foundationpose\_save\_next} and analyzed with the evaluation script in \texttt{extra\_scripts/evaluator.py}.
 
-\subsection{Component-wise Error Analysis}
+\subsection{Pose Error Metrics}
 
-For each sample, the translation and rotation components of the two poses are compared. Translation error is measured per component $(t_x,t_y,t_z)$, and rotation error is expressed, for instance, as rotation vector components $(r_x,r_y,r_z)$ obtained from the relative rotation between the two poses.
-
-Figure~\ref{fig:mse_hist_banana} shows a component-wise mean squared error (MSE) comparison for a banana object; analogous plots are generated for a generic cube and a spanner.
-
-\begin{figure}[H]
-\centering
-\begin{tikzpicture}
-\begin{axis}[
-    ybar,
-    bar width=14pt,
-    width=0.95\textwidth,
-    height=6cm,
-    ymin=0,
-    ylabel={MSE},
-    xlabel={$6$D pose components},
-    symbolic x coords={$t_x$,$t_y$,$t_z$,$r_x$,$r_y$,$r_z$},
-    xtick=data,
-    nodes near coords,
-    grid=both,
-]
-\addplot coordinates {
-    ($t_x$, 0.0025)
-    ($t_y$, 0.0031)
-    ($t_z$, 0.0048)
-    ($r_x$, 0.0120)
-    ($r_y$, 0.0095)
-    ($r_z$, 0.0152)
-};
-\end{axis}
-\end{tikzpicture}
-\caption{Placeholder component-wise MSE histogram for the banana object, using RS--FoundationPose as reference and RS--uxplay--FoundationPose as evaluated pipeline.}
-\label{fig:mse_hist_banana}
-\end{figure}
+For each paired sample, translation error is reported as the Euclidean distance between the reference and evaluated translation vectors, and rotation error is reported as the angle of the relative rotation
+\[
+\Delta \mathbf{R} = \mathbf{R}_{\text{ref}} \mathbf{R}_{\text{eval}}^\top.
+\]
+This metric directly reflects differences in the estimated object frame independent of world-space anchoring.
 
 \subsection{World-Space Error Interpretation}
 
 Discrepancies observed in AVP world space are interpreted as the result of accumulated error from:
 
 \begin{itemize}
-    \item Manual gizmo positioning and orientation ($\mathbf{T}_{W \leftarrow M}$)
+    \item Device-to-camera offset estimation ($\mathbf{T}_{D \leftarrow C}$)
     \item Camera intrinsics and distortion estimates
     \item ArUco pose noise and marker detection artifacts
-    \item Head pose drift and imperfect $\mathbf{T}_{H \leftarrow UX}$ estimation
+    \item Head pose drift and ARKit device anchor errors
 \end{itemize}
 
-It is therefore possible for a pose to be consistent in the uxplay image plane and RealSense frame, yet appear spatially offset in AVP world coordinates. This interpretation matches empirical observations where a physically correct $2$D overlay in uxplay corresponds to an apparently displaced $3$D pose relative to the AVP-rendered RealSense camera and scene.
-
-Debug visualization must also be used with care: rendering the debug window or \texttt{/debug} endpoint inside the AR view can lead to recursive display of the ArUco marker (infinite mirror effect), and multiple marker detections may contaminate pose estimates if not handled appropriately.
+It is therefore possible for a pose to be consistent in the AVP image plane and the RealSense frame, yet appear offset in AVP world coordinates. Debug visualization must also be used with care: rendering the debug window inside the mirrored view can create recursive marker detections and contaminate pose estimates.
 
 % ============================================================
 \appendix
@@ -270,9 +230,9 @@ The following coordinate frames are used:
 \begin{itemize}
     \item $RS_d$: RealSense depth camera frame
     \item $RS_c$: RealSense color camera frame
-    \item $UX$: uxplay camera frame
+    \item $AVP$: AVP camera frame (AirPlay/UxPlay capture)
+    \item $D$: ARKit device anchor frame
     \item $M$: ArUco marker frame
-    \item $H$: AVP head (HMD) frame
     \item $W$: AVP world frame
 \end{itemize}
 
@@ -343,15 +303,15 @@ with homogeneous transform
 \end{bmatrix}.
 \]
 
-For RealSense and uxplay, we obtain
+For RealSense and AVP, we obtain
 \[
-\mathbf{T}_{RS \leftarrow M}, \qquad \mathbf{T}_{UX \leftarrow M}.
+\mathbf{T}_{RS \leftarrow M}, \qquad \mathbf{T}_{AVP \leftarrow M}.
 \]
 
-The camera-to-camera transform from RealSense to uxplay is
+The camera-to-camera transform from RealSense to AVP is
 \[
-\mathbf{T}_{UX \leftarrow RS} =
-\mathbf{T}_{UX \leftarrow M}
+\mathbf{T}_{AVP \leftarrow RS} =
+\mathbf{T}_{AVP \leftarrow M}
 \left( \mathbf{T}_{RS \leftarrow M} \right)^{-1}.
 \]
 
@@ -365,9 +325,9 @@ The inverse of $\mathbf{T}_{RS \leftarrow M}$ is
 \]
 so that
 \[
-\mathbf{R}_{UXRS} = \mathbf{R}_{UXM} \mathbf{R}_{RSM}^\top,
+\mathbf{R}_{AVPRS} = \mathbf{R}_{AVPM} \mathbf{R}_{RSM}^\top,
 \quad
-\mathbf{t}_{UXRS} = \mathbf{t}_{UXM} - \mathbf{R}_{UXM} \mathbf{R}_{RSM}^\top \mathbf{t}_{RSM}.
+\mathbf{t}_{AVPRS} = \mathbf{t}_{AVPM} - \mathbf{R}_{AVPM} \mathbf{R}_{RSM}^\top \mathbf{t}_{RSM}.
 \]
 
 \subsection{Depth Alignment and Reprojection}
@@ -389,66 +349,41 @@ u \\ v \\ 1
 \end{bmatrix}.
 \]
 
-\paragraph{Reprojection into uxplay}
+\paragraph{Reprojection into AVP}
 
-Given $\mathbf{T}_{UX \leftarrow RS}$, the point in uxplay coordinates is
+Given $\mathbf{T}_{AVP \leftarrow RS}$, the point in AVP coordinates is
 \[
-\mathbf{X}_{UX} =
-\mathbf{R}_{UXRS} \mathbf{X}_{RS} + \mathbf{t}_{UXRS}.
+\mathbf{X}_{AVP} =
+\mathbf{R}_{AVPRS} \mathbf{X}_{RS} + \mathbf{t}_{AVPRS}.
 \]
 
-Let $\mathbf{X}_{UX} = [X_{UX},Y_{UX},Z_{UX}]^\top$. Projection into uxplay image coordinates is
+Let $\mathbf{X}_{AVP} = [X_{AVP},Y_{AVP},Z_{AVP}]^\top$. Projection into AVP image coordinates is
 \[
-u_{UX} = f_x^{UX} \frac{X_{UX}}{Z_{UX}} + c_x^{UX}, \quad
-v_{UX} = f_y^{UX} \frac{Y_{UX}}{Z_{UX}} + c_y^{UX},
+u_{AVP} = f_x^{AVP} \frac{X_{AVP}}{Z_{AVP}} + c_x^{AVP}, \quad
+v_{AVP} = f_y^{AVP} \frac{Y_{AVP}}{Z_{AVP}} + c_y^{AVP},
 \]
-and the depth value in uxplay view is $z_{UX} = Z_{UX}$. A z-buffer is used to resolve collisions when multiple points map to the same $(u_{UX},v_{UX})$.
+and the depth value in AVP view is $z_{AVP} = Z_{AVP}$. A z-buffer is used to resolve collisions when multiple points map to the same $(u_{AVP},v_{AVP})$.
 
-\subsection{World Anchor and $\mathbf{T}_{W \leftarrow M}$}
+\subsection{Device Anchor, Camera Offset, and Continuous Tracking}
 
-A world anchor (gizmo) is manually placed to represent the marker frame $M$ in the AVP world. The intended marker frame is:
-
-\begin{itemize}
-    \item Origin at the marker center
-    \item $+X$ along the marker plane to the right
-    \item $+Y$ along the marker plane downward (or upward, as long as consistent with calibration)
-    \item $+Z$ perpendicular to the marker plane, forming a right-handed frame
-\end{itemize}
-
-By adjusting the anchor position and orientation until its axes align with the physical marker, the transform $\mathbf{T}_{W \leftarrow M}$ is defined.
-
-When the marker is visible in uxplay, the uxplay camera pose in world coordinates is
+The AVP device anchor provides the transform $\mathbf{T}_{W \leftarrow D}$ in the ARKit world. The physical offset between device anchor and camera is modeled as a constant transform $\mathbf{T}_{D \leftarrow C}$, yielding the camera pose
 \[
-\mathbf{T}_{W \leftarrow UX} =
-\mathbf{T}_{W \leftarrow M}
-\left( \mathbf{T}_{UX \leftarrow M} \right)^{-1}.
+\mathbf{T}_{W \leftarrow C} = \mathbf{T}_{W \leftarrow D} \mathbf{T}_{D \leftarrow C}.
 \]
 
-\subsection{Head-to-uxplay Transform and Pose Overlay}
-
-The AVP head pose in world coordinates, $\mathbf{T}_{W \leftarrow H}$, is provided by the platform. When the marker is visible, an estimate of the head-to-uxplay transform is computed as
+When the ArUco marker is visible in the AVP camera, the marker pose in world coordinates is
 \[
-\mathbf{T}_{H \leftarrow UX} =
-\left( \mathbf{T}_{W \leftarrow H} \right)^{-1}
-\mathbf{T}_{W \leftarrow M}
-\left( \mathbf{T}_{UX \leftarrow M} \right)^{-1}.
+\mathbf{T}_{W \leftarrow M} = \mathbf{T}_{W \leftarrow C} \mathbf{T}_{C \leftarrow M}.
 \]
 
-Multiple samples of $\mathbf{T}_{H \leftarrow UX}$ can be averaged (translations via Euclidean mean, rotations via quaternion or Lie algebra averaging) to reduce noise.
-
-When the marker is not visible, the uxplay camera pose in world coordinates is approximated as
+For continuous tracking, the relative transform
 \[
-\mathbf{T}_{W \leftarrow UX} \approx
-\mathbf{T}_{W \leftarrow H} \, \mathbf{T}_{H \leftarrow UX},
+\mathbf{T}_{D \leftarrow M} = \left( \mathbf{T}_{W \leftarrow D} \right)^{-1} \mathbf{T}_{W \leftarrow M}
 \]
-and the object pose is transformed to world space via
+is stored at detection time. If the marker becomes temporarily invisible, the system estimates
 \[
-\mathbf{T}_{W \leftarrow O} =
-\mathbf{T}_{W \leftarrow UX}
-\mathbf{T}_{UX \leftarrow O}.
+\mathbf{T}_{W \leftarrow M} \approx \mathbf{T}_{W \leftarrow D} \mathbf{T}_{D \leftarrow M}.
 \]
-
-Periodic re-observation of the marker is used to correct drift and refine $\mathbf{T}_{H \leftarrow UX}$.
 
 % ============================================================
 \section{System Architecture and Usage}
@@ -468,7 +403,7 @@ The AR interface is composed of several coordinated windows that support configu
 \begin{figure}[H]
 \centering
 \fbox{\includegraphics[width=0.9\textwidth]{placeholder_ar_ui_overview.pdf}}
-\caption{Placeholder overview of the visionOS AR interface, including main configuration window, ROI control, anchor setup, help window, debug window, and immersive space.}
+\caption{Placeholder overview of the visionOS AR interface, including main configuration window, ROI window, anchor setup (camera offset calibration), help window, debug window, and immersive space.}
 \label{fig:ar_ui_overview}
 \end{figure}
 
@@ -479,7 +414,7 @@ The main window provides access to global settings and entry points to other too
 \begin{itemize}
     \item API host and port fields
     \item Object mesh (PLY) selection
-    \item ROI radius and color parameters
+    \item ROI overlay radius and color
     \item Toggle for immersive space
     \item Buttons to open debug, help, and anchor setup windows
 \end{itemize}
@@ -492,22 +427,22 @@ The main window provides access to global settings and entry points to other too
 
 \subsubsection{ROI Control and Mask Tuning}
 
-The ROI control window allows the user to define a small circular region in the uxplay RGB view. A disc overlay can be moved and scaled, while HSV parameters are adjusted using sliders and a color picker. This interaction focuses on making the ROI selection quick and intuitive.
+The ROI window provides a full-screen circular overlay that helps the user place and size a disc-shaped ROI. The backend ROI mask is configured via \texttt{/avp\_roi\_config} using normalized center and radius values; the overlay serves as a visual aid for alignment and repeatability.
 
 \begin{figure}[H]
 \centering
 \fbox{\includegraphics[width=0.8\textwidth]{placeholder_roi_control.pdf}}
-\caption{Placeholder ROI control window showing a disc overlay and HSV sliders for mask tuning.}
+\caption{Placeholder ROI control window showing a disc overlay for ROI placement.}
 \end{figure}
 
 \subsubsection{Anchor Setup Window}
 
-The anchor setup window exposes six sliders to control the position and orientation of the world gizmo corresponding to the ArUco marker frame. Visual feedback is provided in the immersive scene so users can align the gizmo axes with the physical marker.
+The anchor setup window exposes three sliders for camera offset calibration (X, Y, Z in meters). Adjustments update the device-to-camera transform used for world alignment and improve the consistency of the ArUco axes overlay.
 
 \begin{figure}[H]
 \centering
 \fbox{\includegraphics[width=0.8\textwidth]{placeholder_anchor_setup.pdf}}
-\caption{Placeholder anchor setup window with sliders for translation and rotation of the world gizmo.}
+\caption{Placeholder anchor setup window with sliders for camera offset calibration.}
 \end{figure}
 
 \subsubsection{Help and Instructions Window}
@@ -518,7 +453,7 @@ A dedicated help window summarizes the recommended calibration and usage steps:
     \item Starting backend services
     \item Positioning the marker and RealSense camera
     \item Configuring API endpoints
-    \item Tuning the ROI and HSV filter
+    \item Adjusting ROI parameters and camera offset calibration
     \item Avoiding recursive marker detection via the debug view
 \end{itemize}
 
@@ -530,7 +465,7 @@ A dedicated help window summarizes the recommended calibration and usage steps:
 
 \subsubsection{Debug Window}
 
-The debug window shows synchronized multi-view outputs: uxplay RGB and depth, RealSense RGB and depth, binary mask visualization, and projected 2D poses (ArUco, RealSense, and FoundationPose). This view is primarily used during development and evaluation.
+The debug window and backend \texttt{/debug} page show synchronized multi-view outputs: AVP RGB, RealSense RGB/depth, ROI mask visualization, transformed depth, and 2D pose overlays. This view is primarily used during development and evaluation.
 
 \begin{figure}[H]
 \centering
@@ -544,7 +479,7 @@ The immersive space renders the AVP world, including:
 
 \begin{itemize}
     \item World axes
-    \item The world anchor gizmo aligned with the ArUco marker
+    \item ArUco board axes (with continuous tracking when occluded)
     \item The estimated RealSense camera pose
     \item The current object pose as a coordinate frame and arrow overlay
 \end{itemize}
@@ -554,27 +489,35 @@ Head motion is continuously streamed to the backend, and pose overlays are updat
 \begin{figure}[H]
 \centering
 \fbox{\includegraphics[width=0.9\textwidth]{placeholder_immersive_space.pdf}}
-\caption{Placeholder immersive space showing world axes, gizmo, and object pose overlays.}
+\caption{Placeholder immersive space showing world axes, ArUco axes, and object pose overlays.}
 \end{figure}
 
 \subsection{API Endpoints}
 
 \begin{table}[H]
 \centering
-\begin{tabular}{|l|l|l|}
-\hline
-\textbf{Endpoint} & \textbf{Method} & \textbf{Description} \\
-\hline
-\texttt{/stream/ux/rgb} & GET & uxplay RGB stream \\
-\texttt{/stream/rs/rgb} & GET & RealSense RGB stream \\
-\texttt{/stream/rs/depth} & GET & Aligned RS depth \\
-\texttt{/aruco/pose} & GET & ArUco pose estimates \\
-\texttt{/foundationpose/run} & POST & Run FoundationPose \\
-\texttt{/foundationpose/result} & GET & Latest pose \\
-\texttt{/debug} & GET & Debug composite view \\
-\hline
+\caption{Selected API endpoints used by the AVP client and debugging tools.}
+\label{tab:api_endpoints}
+\begin{tabular}{p{0.30\linewidth}p{0.12\linewidth}p{0.50\linewidth}}
+    \toprule
+    \textbf{Endpoint} & \textbf{Method} & \textbf{Description} \\
+    \midrule
+    \texttt{/health} & GET & Service status, calibration flags, and ROI state \\
+    \texttt{/models} & GET & List available PLY models \\
+    \texttt{/select\_model} & POST & Select active mesh model \\
+    \texttt{/avp\_roi\_config} & GET/POST & Configure normalized AVP ROI mask \\
+    \texttt{/rs\_roi\_config} & GET/POST & Configure RealSense ROI mask (pixels) \\
+    \texttt{/aruco} & GET & AVP ArUco overlay and pose in camera frame \\
+    \texttt{/get\_rs\_aruco\_frame} & GET & RealSense ArUco overlay and pose \\
+    \texttt{/get\_avp\_mask\_frame} & GET & AVP ROI mask visualization \\
+    \texttt{/get\_transformed\_depth} & GET & RealSense depth reprojected into AVP view \\
+    \texttt{/get\_rs\_pose\_in\_avp} & GET & RealSense camera pose in AVP frame \\
+    \texttt{/get\_foundationpose\_pose} & GET & Latest FoundationPose output \\
+    \texttt{/head\_pose} & POST & Stream head/device pose from visionOS \\
+    \texttt{/debug} & GET & Web debug dashboard \\
+    \texttt{/mjpeg} & GET & Live MJPEG stream with selectable view \\
+    \bottomrule
 \end{tabular}
-\caption{Placeholder API endpoint documentation.}
 \end{table}
 
 \subsection{Usage Workflow}
@@ -583,13 +526,14 @@ A typical workflow is:
 
 \begin{enumerate}
     \item Start the FoundationPose Docker container on the Kubuntu server.
-    \item Start the main CV container (uxplay, alignment, API).
+    \item Start the main CV service (UxPlay capture, RealSense, and API).
     \item Launch the visionOS application and open the main configuration window.
     \item Configure API host and port, and select the desired object mesh.
-    \item Open the ROI control window to position the disc ROI and tune HSV parameters (for the uxplay pipeline), or set the ROI via sliders in the reference pipeline.
-    \item Open the anchor setup window and adjust the gizmo so that it aligns with the physical ArUco marker.
-    \item Optionally open the debug window (outside of the AR view) to verify RGB-D alignment, mask quality, and pose overlays.
-    \item Enable immersive mode to visualize the object pose, world axes, and gizmo overlay in the AVP world.
+    \item Set AVP and RealSense ROI parameters via \texttt{/avp\_roi\_config} and \texttt{/rs\_roi\_config} (or the backend \texttt{/debug} page).
+    \item Open the ROI window to align the visual overlay with the target object.
+    \item Open the anchor setup window and adjust the camera offset so the ArUco axes align with the physical marker.
+    \item Optionally open the debug window (outside the mirrored view) to verify RGB-D alignment, mask quality, and pose overlays.
+    \item Enable immersive mode to visualize the object pose, world axes, and ArUco overlay in the AVP world.
 \end{enumerate}
 
 \begin{figure}[H]
@@ -601,7 +545,7 @@ A typical workflow is:
 % ============================================================
 \section{Code Listings}
 
-This appendix section provides representative code listings for non-trivial components of the pipeline. The listings are placeholders intended to document structure and responsibilities of major modules.
+This appendix section provides representative code excerpts for non-trivial components of the pipeline. The listings document structure and responsibilities of major modules in the current implementation.
 
 % ------------------------------------------------------------
 \subsection{RealSense RGB-D Alignment and Back-Projection}
@@ -627,88 +571,64 @@ self.intrinsics = np.array([
 % ------------------------------------------------------------
 \subsection{ArUco Pose Estimation and Camera-to-Camera Transform}
 
-\begin{lstlisting}[style=code,language=Python,caption={Camera-to-camera transform from ArUco world poses.},label={lst:aruco_Tuxrs}]
-# basic_main_api_with_uxplay_rs.py
+\begin{lstlisting}[style=code,language=Python,caption={Camera-to-camera transform from simultaneous ArUco detections.},label={lst:aruco_Tavprs}]
+# final_pipeline.py
 with avp_pose_lock:
-    T_world_avp = avp_pose_latest.get("pose_matrix")
+    T_avp_board = avp_pose_latest.get("pose_matrix")  # T_avp<-board
 with rs_aruco_lock:
-    T_world_rs = rs_aruco_latest.get("pose_matrix")
+    T_rs_board = rs_aruco_latest.get("pose_matrix")   # T_rs<-board
 
-if T_world_avp is not None and T_world_rs is not None:
-    T_avp_rs = np.linalg.inv(T_world_avp) @ T_world_rs
+if T_avp_board is not None and T_rs_board is not None:
+    T_avp_rs = T_avp_board @ np.linalg.inv(T_rs_board)
 \end{lstlisting}
 
 % ------------------------------------------------------------
-\subsection{Depth Reprojection into uxplay View}
+\subsection{Depth Reprojection into AVP View}
 
-\begin{lstlisting}[style=code,language=Python,caption={Reproject aligned RS depth into the uxplay/AVP view.},label={lst:depth_to_ux}]
-# basic_main_api_with_uxplay_rs.py
-fx_rs, fy_rs = K_rs[0, 0], K_rs[1, 1]
-cx_rs, cy_rs = K_rs[0, 2], K_rs[1, 2]
-X_rs = (u - cx_rs) * z / fx_rs
-Y_rs = (v - cy_rs) * z / fy_rs
-points_rs = np.vstack([X_rs, Y_rs, z, np.ones_like(z)])
-points_avp = T_avp_rs @ points_rs
+\begin{lstlisting}[style=code,language=Python,caption={Reproject aligned RS depth into the AVP view with distortion and z-buffering.},label={lst:depth_to_avp}]
+# final_pipeline.py (simplified)
+pts = cv2.undistortPoints(uv_rs.reshape(-1, 1, 2), K_rs, dist_rs)
+X = pts[:, 0, 0] * z
+Y = pts[:, 0, 1] * z
+points_rs = np.stack([X, Y, z, np.ones_like(z)], axis=1)
+points_avp = (T_avp_rs @ points_rs.T).T
 
-fx_avp, fy_avp = K_avp[0, 0], K_avp[1, 1]
-cx_avp, cy_avp = K_avp[0, 2], K_avp[1, 2]
-X_avp, Y_avp, Z_avp = points_avp[0], points_avp[1], points_avp[2]
-valid_avp = Z_avp > 0.01
-X_avp = X_avp[valid_avp]
-Y_avp = Y_avp[valid_avp]
-Z_avp = Z_avp[valid_avp]
+img_pts, _ = cv2.projectPoints(
+    points_avp[:, :3], np.zeros(3), np.zeros(3), K_avp, dist_avp
+)
+u_avp = img_pts[:, 0, 0].astype(np.int32)
+v_avp = img_pts[:, 0, 1].astype(np.int32)
 
-u_avp = (X_avp * fx_avp / Z_avp + cx_avp).astype(np.int32)
-v_avp = (Y_avp * fy_avp / Z_avp + cy_avp).astype(np.int32)
-valid_px = (u_avp >= 0) & (u_avp < w_avp) & (v_avp >= 0) & (v_avp < h_avp)
-u_avp = u_avp[valid_px]
-v_avp = v_avp[valid_px]
-Z_avp = Z_avp[valid_px]
 depth_avp = np.zeros((h_avp, w_avp), dtype=np.float32)
-depth_avp[v_avp, u_avp] = Z_avp
+depth_avp[v_avp, u_avp] = points_avp[:, 2]  # z-buffering applied in implementation
 \end{lstlisting}
 
 % ------------------------------------------------------------
-\subsection{HSV-Based Binary Mask in ROI (uxplay Pipeline)}
+\subsection{Normalized AVP ROI Mask}
 
-\begin{lstlisting}[style=code,language=Python,caption={HSV mean$\pm$std thresholding with hue wrap-around.},label={lst:hsv_mask}]
-# basic_main_api_with_uxplay_rs.py
-hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+\begin{lstlisting}[style=code,language=Python,caption={Normalized circular ROI mask for the AVP view.},label={lst:avp_roi_mask}]
+# final_pipeline.py
+def _compute_avp_roi_mask(h: int, w: int) -> np.ndarray:
+    with avp_roi_lock:
+        cfg = AvpRoiConfig(**vars(avp_roi_cfg))
 
-mh, ms, mv = int(cfg.mean_h), int(cfg.mean_s), int(cfg.mean_v)
-sh, ss, sv = int(cfg.std_h), int(cfg.std_s), int(cfg.std_v)
+    if not cfg.enabled:
+        return np.full((h, w), 255, dtype=np.uint8)
 
-lo_s = _clamp(ms - ss, 0, 255)
-hi_s = _clamp(ms + ss, 0, 255)
-lo_v = _clamp(mv - sv, 0, 255)
-hi_v = _clamp(mv + sv, 0, 255)
+    cx = int(cfg.cx_n * (w - 1))
+    cy = int(cfg.cy_n * (h - 1))
+    r_pix = int(cfg.r_n * float(min(w, h)))
 
-lo_h = mh - sh
-hi_h = mh + sh
-
-if 0 <= lo_h and hi_h <= 179:
-    lower = np.array([lo_h, lo_s, lo_v], dtype=np.uint8)
-    upper = np.array([hi_h, hi_s, hi_v], dtype=np.uint8)
-    mask = cv2.inRange(hsv, lower, upper)
-elif lo_h < 0:
-    lower1 = np.array([0, lo_s, lo_v], dtype=np.uint8)
-    upper1 = np.array([_clamp(hi_h, 0, 179), hi_s, hi_v], dtype=np.uint8)
-    lower2 = np.array([lo_h % 180, lo_s, lo_v], dtype=np.uint8)
-    upper2 = np.array([179, hi_s, hi_v], dtype=np.uint8)
-    mask = cv2.bitwise_or(cv2.inRange(hsv, lower1, upper1), cv2.inRange(hsv, lower2, upper2))
-else:
-    lower1 = np.array([_clamp(lo_h, 0, 179), lo_s, lo_v], dtype=np.uint8)
-    upper1 = np.array([179, hi_s, hi_v], dtype=np.uint8)
-    lower2 = np.array([0, lo_s, lo_v], dtype=np.uint8)
-    upper2 = np.array([hi_h % 180, hi_s, hi_v], dtype=np.uint8)
-    mask = cv2.bitwise_or(cv2.inRange(hsv, lower1, upper1), cv2.inRange(hsv, lower2, upper2))
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.circle(mask, (cx, cy), max(1, r_pix), 255, -1)
+    return mask
 \end{lstlisting}
 
 % ------------------------------------------------------------
 \subsection{ROI Slider Mask (Reference RS Pipeline)}
 
 \begin{lstlisting}[style=code,language=Python,caption={Slider-controlled circular ROI mask (RS reference pipeline).},label={lst:roi_mask_rs}]
-# rs_foundationpose_pipeline.py
+# final_pipeline.py
 mask = np.zeros(rgb.shape[:2], dtype=np.uint8)
 cv2.circle(mask, (cx, cy), radius, 255, -1)
 \end{lstlisting}
@@ -717,7 +637,7 @@ cv2.circle(mask, (cx, cy), radius, 255, -1)
 \subsection{API Endpoints: Inference Orchestration}
 
 \begin{lstlisting}[style=code,language=Python,caption={FoundationPose inference call with aligned RGB-D and mask.},label={lst:api_infer}]
-# basic_main_api_with_uxplay_rs.py
+# final_pipeline.py
 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 pose = estimate_pose(
     rgb=rgb,

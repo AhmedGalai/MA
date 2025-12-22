@@ -34,6 +34,9 @@
 		AA0000000000000000001019 /* AnchorSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000002025 /* AnchorSetupView.swift */; };
 		AA000000000000000000101A /* FoundationPoseModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000002026 /* FoundationPoseModel.swift */; };
 		AA000000000000000000101B /* HelpView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000002027 /* HelpView.swift */; };
+		AA000000000000000000101C /* CameraTransformUtils.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000002028 /* CameraTransformUtils.swift */; };
+		AA000000000000000000101D /* AvpRoiService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000002029 /* AvpRoiService.swift */; };
+		AA000000000000000000101E /* RoiNormalizationStrategy.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000202A /* RoiNormalizationStrategy.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -66,6 +69,9 @@
 		AA0000000000000000002025 /* AnchorSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnchorSetupView.swift; sourceTree = "<group>"; };
 		AA0000000000000000002026 /* FoundationPoseModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FoundationPoseModel.swift; sourceTree = "<group>"; };
 		AA0000000000000000002027 /* HelpView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HelpView.swift; sourceTree = "<group>"; };
+		AA0000000000000000002028 /* CameraTransformUtils.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraTransformUtils.swift; sourceTree = "<group>"; };
+		AA0000000000000000002029 /* AvpRoiService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvpRoiService.swift; sourceTree = "<group>"; };
+		AA000000000000000000202A /* RoiNormalizationStrategy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoiNormalizationStrategy.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -136,6 +142,7 @@
 				AA0000000000000000002011 /* ModelService.swift */,
 				AA0000000000000000002012 /* PoseService.swift */,
 				AA0000000000000000002013 /* HeadPoseService.swift */,
+				AA0000000000000000002029 /* AvpRoiService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -151,7 +158,9 @@
 		AA0000000000000000000440 /* Utilities */ = {
 			isa = PBXGroup;
 			children = (
+				AA0000000000000000002028 /* CameraTransformUtils.swift */,
 				AA0000000000000000002015 /* MatrixUtils.swift */,
+				AA000000000000000000202A /* RoiNormalizationStrategy.swift */,
 			);
 			path = Utilities;
 			sourceTree = "<group>";
@@ -263,8 +272,11 @@
 				AA000000000000000000100C /* PoseService.swift in Sources */,
 				AA000000000000000000100D /* HeadPoseService.swift in Sources */,
 				AA000000000000000000100E /* ArrowFactory.swift in Sources */,
+				AA000000000000000000101C /* CameraTransformUtils.swift in Sources */,
+				AA000000000000000000101E /* RoiNormalizationStrategy.swift in Sources */,
 				AA000000000000000000100F /* MatrixUtils.swift in Sources */,
 				AA0000000000000000001010 /* LogsView.swift in Sources */,
+				AA000000000000000000101D /* AvpRoiService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
