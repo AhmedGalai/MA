@@ -107,7 +107,7 @@ final class ArucoStreamModel: ObservableObject {
         calibratedBoardTransform = latest * calibration
     }
 
-    private static func decodeImage(_ dataURL: String) -> UIImage? {
+    nonisolated private static func decodeImage(_ dataURL: String) -> UIImage? {
         guard let commaIndex = dataURL.firstIndex(of: ",") else { return nil }
         let b64 = String(dataURL[dataURL.index(after: commaIndex)...])
         guard let data = Data(base64Encoded: b64) else { return nil }
