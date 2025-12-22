@@ -31,6 +31,12 @@ echo "  Process FPS: ${PROCESS_FPS:-15.0}"
 echo "  RS: ${RS_WIDTH:-640}x${RS_HEIGHT:-480} @ ${RS_FPS:-30}"
 echo ""
 
+if [[ -f "/app/extra_scripts/reset_realsense.py" ]]; then
+  echo "Resetting RealSense device..."
+  python3 /app/extra_scripts/reset_realsense.py || echo "WARNING: reset_realsense.py failed"
+  echo ""
+fi
+
 ARGS=(
   --host "${API_HOST:-0.0.0.0}"
   --port "${API_PORT:-8000}"

@@ -2009,25 +2009,6 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
   </div>
 
   <div class="controls">
-    <div style="font-weight:600; margin-bottom:6px;">AVP ROI (normalized)</div>
-    <div class="row">
-      <label>AVP ROI Center X</label>
-      <input id="avpX" type="range" min="0" max="1000" value="500" />
-      <span class="mono" id="avpXOut"></span>
-    </div>
-    <div class="row">
-      <label>AVP ROI Center Y</label>
-      <input id="avpY" type="range" min="0" max="1000" value="500" />
-      <span class="mono" id="avpYOut"></span>
-    </div>
-    <div class="row">
-      <label>AVP ROI Radius</label>
-      <input id="avpR" type="range" min="1" max="1000" value="180" />
-      <span class="mono" id="avpROut"></span>
-    </div>
-
-    <hr style="border:none;border-top:1px solid #eee;margin:12px 0;" />
-
     <div style="font-weight:600; margin-bottom:6px;">RS ROI (pixels)</div>
     <div class="row">
       <label>ROI X Center</label>
@@ -2060,14 +2041,6 @@ async function postROI(payload) {{
   }});
 }}
 
-async function postAvpROI(payload) {{
-  await fetch("/avp_roi_config", {{
-    method: "POST",
-    headers: {{"Content-Type":"application/json"}},
-    body: JSON.stringify(payload)
-  }});
-}}
-
 async function postSave(enabled) {{
   await fetch("/foundationpose_save_next", {{
     method: "POST",
@@ -2081,22 +2054,9 @@ async function loadROI() {{
   return await r.json();
 }}
 
-async function loadAvpROI() {{
-  const r = await fetch("/avp_roi_config");
-  return await r.json();
-}}
-
 async function wire() {{
   const viewSelect = document.getElementById("viewSelect");
   const viewImg = document.getElementById("viewImg");
-
-  // AVP ROI
-  const avpX = document.getElementById("avpX");
-  const avpY = document.getElementById("avpY");
-  const avpR = document.getElementById("avpR");
-  const avpXOut = document.getElementById("avpXOut");
-  const avpYOut = document.getElementById("avpYOut");
-  const avpROut = document.getElementById("avpROut");
 
   // RS ROI
   const roiX = document.getElementById("roiX");
@@ -2113,28 +2073,6 @@ async function wire() {{
     const view = encodeURIComponent(viewSelect.value);
     viewImg.src = `/mjpeg?view=${{view}}&_ts=${{Date.now()}}`;
   }});
-
-  // init AVP ROI
-  const avp = await loadAvpROI();
-  avpX.value = Math.round((avp.cx_n || 0.5) * 1000);
-  avpY.value = Math.round((avp.cy_n || 0.5) * 1000);
-  avpR.value = Math.round((avp.r_n || 0.18) * 1000);
-  avpXOut.textContent = (avp.cx_n || 0.5).toFixed(3);
-  avpYOut.textContent = (avp.cy_n || 0.5).toFixed(3);
-  avpROut.textContent = (avp.r_n || 0.18).toFixed(3);
-
-  function updateAvpROI() {{
-    const cx_n = (parseInt(avpX.value,10)/1000.0);
-    const cy_n = (parseInt(avpY.value,10)/1000.0);
-    const r_n  = (parseInt(avpR.value,10)/1000.0);
-    avpXOut.textContent = cx_n.toFixed(3);
-    avpYOut.textContent = cy_n.toFixed(3);
-    avpROut.textContent = r_n.toFixed(3);
-    postAvpROI({{cx_n, cy_n, r_n, enabled:true}});
-  }}
-  avpX.addEventListener("input", updateAvpROI);
-  avpY.addEventListener("input", updateAvpROI);
-  avpR.addEventListener("input", updateAvpROI);
 
   // init RS ROI
   const cfg = await loadROI();
