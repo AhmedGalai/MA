@@ -469,7 +469,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-/* Build configuration list for PBXNativeTarget "PoseOverlayWithCalibration" */ = {
+		AA0000000000000000008001 /* Build configuration list for PBXNativeTarget "PoseOverlayWithCalibration" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				AA0000000000000000008005 /* Debug */,
