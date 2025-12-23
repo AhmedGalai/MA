@@ -148,6 +148,7 @@ struct ContentView: View {
     private func initializeConnection() {
         hostField = storedHost
         portField = storedPort
+        LocalNetworkPermission.request()
         Task {
             await applyConnection()
             await MainActor.run {

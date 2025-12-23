@@ -38,6 +38,7 @@
 		AA000000000000000000101D /* AvpRoiService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000002029 /* AvpRoiService.swift */; };
 		AA000000000000000000101E /* RoiNormalizationStrategy.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000202A /* RoiNormalizationStrategy.swift */; };
 		AA000000000000000000101F /* CalibrationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000202B /* CalibrationModel.swift */; };
+		AA0000000000000000001020 /* LocalNetworkPermission.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000002030 /* LocalNetworkPermission.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -74,6 +75,7 @@
 		AA0000000000000000002029 /* AvpRoiService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvpRoiService.swift; sourceTree = "<group>"; };
 		AA000000000000000000202A /* RoiNormalizationStrategy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoiNormalizationStrategy.swift; sourceTree = "<group>"; };
 		AA000000000000000000202B /* CalibrationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibrationModel.swift; sourceTree = "<group>"; };
+		AA0000000000000000002030 /* LocalNetworkPermission.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalNetworkPermission.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -162,6 +164,7 @@
 			isa = PBXGroup;
 			children = (
 				AA0000000000000000002028 /* CameraTransformUtils.swift */,
+				AA0000000000000000002030 /* LocalNetworkPermission.swift */,
 				AA0000000000000000002015 /* MatrixUtils.swift */,
 				AA000000000000000000202A /* RoiNormalizationStrategy.swift */,
 			);
@@ -281,6 +284,7 @@
 				AA000000000000000000100F /* MatrixUtils.swift in Sources */,
 				AA0000000000000000001010 /* LogsView.swift in Sources */,
 				AA000000000000000000101D /* AvpRoiService.swift in Sources */,
+				AA0000000000000000001020 /* LocalNetworkPermission.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
