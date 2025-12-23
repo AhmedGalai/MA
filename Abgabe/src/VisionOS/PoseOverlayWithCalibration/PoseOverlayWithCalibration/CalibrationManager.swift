@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor
 final class CalibrationManager: ObservableObject {
     @Published private(set) var calibrationTransform: simd_float4x4?
+    nonisolated(unsafe) private(set) var calibrationTransformSnapshot: simd_float4x4?
 
     private let storageKey = "poseoverlay.calibrationTransform"
 
@@ -14,11 +15,13 @@ final class CalibrationManager: ObservableObject {
 
     func saveCalibration(transform: simd_float4x4) {
         calibrationTransform = transform
+        calibrationTransformSnapshot = transform
         persist()
     }
 
     func clearCalibration() {
         calibrationTransform = nil
+        calibrationTransformSnapshot = nil
         persist()
     }
 
@@ -48,5 +51,6 @@ final class CalibrationManager: ObservableObject {
             SIMD4<Float>(values[12], values[13], values[14], values[15])
         ))
         calibrationTransform = m
+        calibrationTransformSnapshot = m
     }
 }

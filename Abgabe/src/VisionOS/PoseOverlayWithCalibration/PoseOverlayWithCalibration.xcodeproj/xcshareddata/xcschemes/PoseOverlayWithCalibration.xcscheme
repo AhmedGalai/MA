@@ -15,7 +15,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "AA0000000000000000005001"
-               BuildableName = "PoseOverlayWithCalibration.app"
+               BuildableName = "PoseOverlayUxplay.app"
                BlueprintName = "PoseOverlayWithCalibration"
                ReferencedContainer = "container:PoseOverlayWithCalibration.xcodeproj">
             </BuildableReference>
@@ -53,7 +53,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "AA0000000000000000005001"
-            BuildableName = "PoseOverlayWithCalibration.app"
+            BuildableName = "PoseOverlayUxplay.app"
             BlueprintName = "PoseOverlayWithCalibration"
             ReferencedContainer = "container:PoseOverlayWithCalibration.xcodeproj">
          </BuildableReference>
@@ -70,7 +70,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "AA0000000000000000005001"
-            BuildableName = "PoseOverlayWithCalibration.app"
+            BuildableName = "PoseOverlayUxplay.app"
             BlueprintName = "PoseOverlayWithCalibration"
             ReferencedContainer = "container:PoseOverlayWithCalibration.xcodeproj">
          </BuildableReference>

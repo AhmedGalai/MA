@@ -27,7 +27,7 @@ enum CameraTransformUtils {
     /// Reads from CalibrationManager if a calibrated value is available,
     /// otherwise returns a default estimated offset.
     static var currentCameraOffset: simd_float4x4 {
-        if let calibratedTransform = _calibrationManager?.calibrationTransform {
+        if let calibratedTransform = _calibrationManager?.calibrationTransformSnapshot {
             return calibratedTransform
         }
         // Default estimated physical offset of AVP main camera from DeviceAnchor origin

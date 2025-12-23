@@ -41,3 +41,35 @@ enum MatrixUtils {
         return simd_float4x4(columns: (c0, c1, c2, c3))
     }
 }
+
+extension simd_float4x4 {
+    init(rotationX angle: Float) {
+        self = matrix_identity_float4x4
+        let c = cos(angle)
+        let s = sin(angle)
+        columns.1.y = c
+        columns.1.z = s
+        columns.2.y = -s
+        columns.2.z = c
+    }
+
+    init(rotationY angle: Float) {
+        self = matrix_identity_float4x4
+        let c = cos(angle)
+        let s = sin(angle)
+        columns.0.x = c
+        columns.0.z = -s
+        columns.2.x = s
+        columns.2.z = c
+    }
+
+    init(rotationZ angle: Float) {
+        self = matrix_identity_float4x4
+        let c = cos(angle)
+        let s = sin(angle)
+        columns.0.x = c
+        columns.0.y = s
+        columns.1.x = -s
+        columns.1.y = c
+    }
+}

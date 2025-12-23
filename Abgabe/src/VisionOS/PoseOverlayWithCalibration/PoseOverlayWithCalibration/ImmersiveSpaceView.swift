@@ -12,6 +12,7 @@ struct ImmersiveSpaceView: View {
     @EnvironmentObject private var rsPoseModel: RealSensePoseModel
     @EnvironmentObject private var foundationPoseModel: FoundationPoseModel
     @EnvironmentObject private var calibrationModel: CalibrationModel
+    @EnvironmentObject private var logStore: LogStore
 
     @State private var boardAxes: Entity?
     @State private var worldAnchor: AnchorEntity?
@@ -92,7 +93,7 @@ struct ImmersiveSpaceView: View {
         guard let gizmo = gizmo,
               let T_camera_object = arucoStream.latestPose?.realityTransform,
               let T_world_device = sensorModel.latestDeviceTransform else {
-            logStore.add("Missing data for calibration", level: .error)
+            logStore.add("Missing data for calibration")
             return
         }
 
@@ -104,7 +105,7 @@ struct ImmersiveSpaceView: View {
         let newOffset = T_device_world * T_world_gizmo * T_object_camera
         
         calibrationManager.saveCalibration(transform: newOffset)
-        logStore.add("Saved new camera offset to UserDefaults", level: .info)
+        logStore.add("Saved new camera offset to UserDefaults")
     }
     
     private func updateBoardAxes() {
