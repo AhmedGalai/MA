@@ -11,15 +11,12 @@ struct ImmersiveSpaceView: View {
     @EnvironmentObject private var calibrationManager: CalibrationManager
     @EnvironmentObject private var rsPoseModel: RealSensePoseModel
     @EnvironmentObject private var foundationPoseModel: FoundationPoseModel
-    @EnvironmentObject private var logs: LogStore
 
     @State private var boardAxes: Entity?
     @State private var worldAnchor: AnchorEntity?
     @State private var rsAxes: Entity?
     @State private var foundationAxes: Entity?
-    @State private var lastFoundationMessage: String?
-    @State private var foundationFallbackActive = false
-    @State private var frameCounter: Int = 0
+    @State private var labelsAdded = false
 
     var body: some View {
         RealityView { content in
@@ -27,19 +24,19 @@ struct ImmersiveSpaceView: View {
             content.add(anchor)
             worldAnchor = anchor
 
-            let boardAxesEntity = makeBoardAxesEntity()
+            let boardAxesEntity = makeBoardAxesEntity(includeLabel: false)
             boardAxesEntity.name = "BoardAxes"
             boardAxesEntity.isEnabled = false
             anchor.addChild(boardAxesEntity)
             boardAxes = boardAxesEntity
 
-            let rsAxesEntity = makeRSEntity()
+            let rsAxesEntity = makeRSEntity(includeLabel: false)
             rsAxesEntity.name = "RealSenseAxes"
             rsAxesEntity.isEnabled = false
             anchor.addChild(rsAxesEntity)
             rsAxes = rsAxesEntity
 
-            let foundationAxesEntity = makeFoundationPoseEntity()
+            let foundationAxesEntity = makeFoundationPoseEntity(includeLabel: false)
             foundationAxesEntity.name = "FoundationPoseAxes"
             foundationAxesEntity.isEnabled = false
             anchor.addChild(foundationAxesEntity)
@@ -48,11 +45,28 @@ struct ImmersiveSpaceView: View {
             updateBoardAxes()
             updateRSPose()
             updateFoundationPose()
-            frameCounter += 1
         }
         .task {
-            appModel.setImmersiveSpacePresented(true)
-            await sensorModel.restartARKitTracking()
+            await MainActor.run { appModel.setImmersiveSpacePresented(true) }
+            await Task.yield()
+
+            Task { @MainActor in
+                guard !labelsAdded else { return }
+                labelsAdded = true
+                if let boardAxes {
+                    addLabel(to: boardAxes, text: "aruco", position: [0, 0.14, 0])
+                }
+                if let rsAxes {
+                    addLabel(to: rsAxes, text: "Realsense", position: [0, 0.12, 0])
+                }
+                if let foundationAxes {
+                    addLabel(to: foundationAxes, text: "foundationpose", position: [0, 0.12, 0])
+                }
+            }
+
+            Task(priority: .userInitiated) {
+                await sensorModel.restartARKitTracking()
+            }
         }
         .onDisappear {
             appModel.setImmersiveSpacePresented(false)
@@ -65,9 +79,6 @@ struct ImmersiveSpaceView: View {
         // Use cached device transform from the sensor model to avoid re-querying ARKit here.
         guard let deviceTransform = sensorModel.latestDeviceTransform else {
             boardAxes.isEnabled = false
-            if frameCounter % 60 == 0 {
-                logs.add("⚠️ Waiting for device anchor")
-            }
             return
         }
 
@@ -78,7 +89,6 @@ struct ImmersiveSpaceView: View {
                 cameraPose: T_camera_aruco,
                 deviceTransform: deviceTransform
             )
-            arucoStream.deviceToArucoTransform = T_device_aruco
 
             // Transform to world space
             let T_world_aruco = CameraTransformUtils.arucoPoseToWorld(
@@ -88,31 +98,9 @@ struct ImmersiveSpaceView: View {
 
             boardAxes.isEnabled = true
             boardAxes.transform = Transform(matrix: T_world_aruco)
-            arucoStream.isTracking = true
-
-            // Log position periodically
-            if frameCounter % 60 == 0 {
-                let pos = T_world_aruco.columns.3
-                logs.add("ArUco world pos: [\(String(format: "%.3f", pos.x)), \(String(format: "%.3f", pos.y)), \(String(format: "%.3f", pos.z))]")
-            }
-        } else if let T_device_aruco = arucoStream.deviceToArucoTransform {
-            // ArUco not visible - use continuous tracking with stored transform
-            let T_world_aruco = CameraTransformUtils.estimateArucoWorldPose(
-                deviceToAruco: T_device_aruco,
-                deviceTransform: deviceTransform
-            )
-
-            boardAxes.isEnabled = true
-            boardAxes.transform = Transform(matrix: T_world_aruco)
-            // Keep isTracking true to indicate we're still showing the pose
-
-            if frameCounter % 120 == 0 {
-                logs.add("📍 Continuous tracking (ArUco not visible)")
-            }
         } else {
             // No ArUco detected and no stored transform - disable
             boardAxes.isEnabled = false
-            arucoStream.isTracking = false
         }
     }
 
@@ -131,18 +119,9 @@ struct ImmersiveSpaceView: View {
         if let matrix = foundationPoseModel.poseMatrix {
             foundationAxes.isEnabled = true
             foundationAxes.transform = Transform(matrix: matrix)
-            foundationFallbackActive = false
         } else {
             foundationAxes.isEnabled = true
             foundationAxes.transform = Transform()
-            if !foundationFallbackActive {
-                foundationFallbackActive = true
-                logs.add("FoundationPose: using anchor fallback")
-            }
-            if let msg = foundationPoseModel.lastMessage, msg != lastFoundationMessage {
-                lastFoundationMessage = msg
-                logs.add("FoundationPose: \(msg)")
-            }
         }
     }
 
@@ -173,7 +152,7 @@ struct ImmersiveSpaceView: View {
         return entity
     }
 
-    private func makeBoardAxesEntity() -> Entity {
+    private func makeBoardAxesEntity(includeLabel: Bool) -> Entity {
         let root = Entity()
         let scale: Float = 0.6
 
@@ -191,13 +170,13 @@ struct ImmersiveSpaceView: View {
         root.addChild(xArrow)
         root.addChild(yArrow)
         root.addChild(zArrow)
-        let label = makeTextLabel(text: "aruco")
-        label.position = [0, 0.14, 0]
-        root.addChild(label)
+        if includeLabel {
+            addLabel(to: root, text: "aruco", position: [0, 0.14, 0])
+        }
         return root
     }
 
-    private func makeRSEntity() -> Entity {
+    private func makeRSEntity(includeLabel: Bool) -> Entity {
         let root = Entity()
         let scale: Float = 0.45
 
@@ -216,13 +195,13 @@ struct ImmersiveSpaceView: View {
         root.addChild(yArrow)
         root.addChild(zArrow)
 
-        let label = makeTextLabel(text: "Realsense")
-        label.position = [0, 0.12, 0]
-        root.addChild(label)
+        if includeLabel {
+            addLabel(to: root, text: "Realsense", position: [0, 0.12, 0])
+        }
         return root
     }
 
-    private func makeFoundationPoseEntity() -> Entity {
+    private func makeFoundationPoseEntity(includeLabel: Bool) -> Entity {
         let root = Entity()
         let scale: Float = 0.45
 
@@ -241,14 +220,42 @@ struct ImmersiveSpaceView: View {
         root.addChild(yArrow)
         root.addChild(zArrow)
 
-        let label = makeTextLabel(text: "foundationpose")
-        label.position = [0, 0.12, 0]
-        root.addChild(label)
+        if includeLabel {
+            addLabel(to: root, text: "foundationpose", position: [0, 0.12, 0])
+        }
         return root
+    }
+
+    private func addLabel(to entity: Entity, text: String, position: SIMD3<Float>) {
+        let label = makeTextLabel(text: text)
+        label.position = position
+        entity.addChild(label)
     }
 
     private func makeTextLabel(text: String) -> ModelEntity {
-        let mesh = MeshResource.generateText(
+        let mesh: MeshResource
+        switch text {
+        case "aruco":
+            mesh = TextMeshCache.aruco
+        case "Realsense":
+            mesh = TextMeshCache.realsense
+        case "foundationpose":
+            mesh = TextMeshCache.foundationpose
+        default:
+            mesh = TextMeshCache.makeMesh(for: text)
+        }
+        let material = SimpleMaterial(color: .white, roughness: 0.4, isMetallic: false)
+        return ModelEntity(mesh: mesh, materials: [material])
+    }
+}
+
+private enum TextMeshCache {
+    static let aruco = makeMesh(for: "aruco")
+    static let realsense = makeMesh(for: "Realsense")
+    static let foundationpose = makeMesh(for: "foundationpose")
+
+    static func makeMesh(for text: String) -> MeshResource {
+        MeshResource.generateText(
             text,
             extrusionDepth: 0.002,
             font: .systemFont(ofSize: 0.08),
@@ -256,8 +263,6 @@ struct ImmersiveSpaceView: View {
             alignment: .center,
             lineBreakMode: .byWordWrapping
         )
-        let material = SimpleMaterial(color: .white, roughness: 0.4, isMetallic: false)
-        return ModelEntity(mesh: mesh, materials: [material])
     }
 }
 

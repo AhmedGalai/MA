@@ -33,6 +33,7 @@ final class SensorDataModel: ObservableObject {
     private let arkitSession = ARKitSession()
     let worldTracking = WorldTrackingProvider()  // Exposed for camera transform queries
     private var updateTimer: Timer?
+    private var updateTask: Task<Void, Never>?
 
     private var started = false
     private var apiBaseURL: URL?
@@ -64,13 +65,17 @@ final class SensorDataModel: ObservableObject {
 
     func restartARKitTracking() async {
         NSLog("📱 [SensorDataModel] restartARKitTracking() called from ImmersiveSpace")
-        await startARKitTracking()
+        Task.detached(priority: .userInitiated) { [weak self] in
+            await self?.startARKitTrackingInBackground()
+        }
     }
 
     func stop() {
         started = false
         updateTimer?.invalidate()
         updateTimer = nil
+        updateTask?.cancel()
+        updateTask = nil
         motionManager.stopDeviceMotionUpdates()
         statusMessage = "Stopped"
         latestDeviceTransform = nil
@@ -78,13 +83,20 @@ final class SensorDataModel: ObservableObject {
 
     // MARK: - ARKit Tracking (visionOS)
 
-    private func startARKitTracking() async {
+    private func startARKitTrackingInBackground() async {
         NSLog("📱 [SensorDataModel] Starting ARKitSession...")
 
         do {
+            let (session, tracking) = await MainActor.run { (arkitSession, worldTracking) }
+            await MainActor.run {
+                updateTimer?.invalidate()
+                updateTimer = nil
+                updateTask?.cancel()
+                updateTask = nil
+            }
             // Request authorization first (this shows the permission prompt)
             NSLog("📱 [SensorDataModel] Requesting ARKit authorization...")
-            let auth = await arkitSession.requestAuthorization(for: [.worldSensing])
+            let auth = await session.requestAuthorization(for: [.worldSensing])
 
             guard auth[.worldSensing] == .allowed else {
                 NSLog("📱 [SensorDataModel] ❌ WorldSensing not authorized: \(auth[.worldSensing])")
@@ -99,26 +111,36 @@ final class SensorDataModel: ObservableObject {
             NSLog("📱 [SensorDataModel] ✓ ARKit authorized")
 
             // Run ARKit session with world tracking.
-            try await arkitSession.run([worldTracking])
+            try await session.run([tracking])
             NSLog("📱 [SensorDataModel] ✓ ARKitSession running")
 
             // Wait a moment for tracking to stabilize
             try? await Task.sleep(for: .milliseconds(500))
 
             // Check if world tracking is running
-            NSLog("📱 [SensorDataModel] WorldTracking state: \(worldTracking.state)")
+            NSLog("📱 [SensorDataModel] WorldTracking state: \(tracking.state)")
 
-            if worldTracking.state != .running {
-                NSLog("📱 [SensorDataModel] ⚠️ WorldTracking not running yet: \(worldTracking.state), continuing anyway...")
+            if tracking.state != .running {
+                NSLog("📱 [SensorDataModel] ⚠️ WorldTracking not running yet: \(tracking.state), continuing anyway...")
             }
 
-            // Set up timer to poll device anchor at 60Hz even if paused.
-            // Keep the callback lightweight to avoid UI stalls.
-            self.updateTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-                self?.updateFromARKit()
+            // Poll device anchor off the main thread to avoid UI stalls.
+            await MainActor.run {
+                self.updateTask = Task.detached(priority: .userInitiated) { [weak self] in
+                    while !Task.isCancelled {
+                        if let deviceAnchor = tracking.queryDeviceAnchor(atTimestamp: CACurrentMediaTime()) {
+                            let sample = Self.makeARKitSample(from: deviceAnchor.originFromAnchorTransform)
+                            await self?.applyARKitSample(sample)
+                        } else if let lastPoseUpdate = await self?.lastPoseUpdate,
+                                  lastPoseUpdate == .distantPast {
+                            NSLog("📱 [SensorDataModel] ❌ queryDeviceAnchor returned nil (tracking not ready?)")
+                        }
+                        try? await Task.sleep(for: .milliseconds(33))
+                    }
+                }
+                self.statusMessage = "Tracking head pose"
             }
-            self.statusMessage = "Tracking head pose"
-            NSLog("📱 [SensorDataModel] ✓ Started 60Hz polling timer")
+            NSLog("📱 [SensorDataModel] ✓ Started 60Hz polling task")
 
         } catch {
             NSLog("📱 [SensorDataModel] ❌ ARKit error: \(error.localizedDescription)")
@@ -128,34 +150,26 @@ final class SensorDataModel: ObservableObject {
         }
     }
 
-    private func updateFromARKit() {
-        // Query device anchor for current head pose
-        guard let deviceAnchor = worldTracking.queryDeviceAnchor(atTimestamp: CACurrentMediaTime()) else {
-            // Log first failure
-            if self.lastPoseUpdate == .distantPast {
-                NSLog("📱 [SensorDataModel] ❌ queryDeviceAnchor returned nil (tracking not ready?)")
-            }
-            return
-        }
+    private struct ARKitSample {
+        let position: SIMD3<Double>
+        let orientation: simd_quatd
+        let eulerDegrees: SIMD3<Double>
+        let transform: simd_float4x4
+    }
 
-        // Get transform matrix (4x4)
-        let transform = deviceAnchor.originFromAnchorTransform
-
-        // Extract position (translation from matrix)
+    nonisolated private static func makeARKitSample(from transform: simd_float4x4) -> ARKitSample {
         let position = SIMD3<Double>(
             Double(transform.columns.3.x),
             Double(transform.columns.3.y),
             Double(transform.columns.3.z)
         )
 
-        // Extract rotation matrix (upper-left 3x3)
         let rotationMatrix = simd_float3x3(
             SIMD3<Float>(transform.columns.0.x, transform.columns.0.y, transform.columns.0.z),
             SIMD3<Float>(transform.columns.1.x, transform.columns.1.y, transform.columns.1.z),
             SIMD3<Float>(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
         )
 
-        // Convert rotation matrix to quaternion
         let orientation = simd_quatf(rotationMatrix)
         let orientationD = simd_quatd(
             ix: Double(orientation.imag.x),
@@ -163,25 +177,34 @@ final class SensorDataModel: ObservableObject {
             iz: Double(orientation.imag.z),
             r: Double(orientation.real)
         )
+        let euler = eulerDegrees(from: orientationD)
 
+        return ARKitSample(
+            position: position,
+            orientation: orientationD,
+            eulerDegrees: euler,
+            transform: transform
+        )
+    }
+
+    private func applyARKitSample(_ sample: ARKitSample) {
         // First update - log it
         if self.lastPoseUpdate == .distantPast {
             NSLog("📱 [SensorDataModel] ✓✓✓ RECEIVING ARKit UPDATES! ✓✓✓")
-            NSLog("📱 [SensorDataModel] Position: [\(position.x), \(position.y), \(position.z)]")
+            NSLog("📱 [SensorDataModel] Position: [\(sample.position.x), \(sample.position.y), \(sample.position.z)]")
         }
 
-        self.headPosition = position
-        self.headOrientation = orientationD
-        let euler = Self.eulerDegrees(from: orientationD)
-        self.headEulerDegrees = euler
-        self.latestDeviceTransform = transform
+        self.headPosition = sample.position
+        self.headOrientation = sample.orientation
+        self.headEulerDegrees = sample.eulerDegrees
+        self.latestDeviceTransform = sample.transform
         self.lastPoseUpdate = Date()
         self.lastMotionUpdate = Date()
         self.frameCount += 1  // Increment frame counter for visual feedback
 
         // Log every 60 frames (1 second at 60Hz)
         if self.frameCount % 60 == 0 {
-            NSLog("📱 [SensorDataModel] Frame \(self.frameCount) - Pos: [\(String(format: "%.3f", position.x)), \(String(format: "%.3f", position.y)), \(String(format: "%.3f", position.z))]")
+            NSLog("📱 [SensorDataModel] Frame \(self.frameCount) - Pos: [\(String(format: "%.3f", sample.position.x)), \(String(format: "%.3f", sample.position.y)), \(String(format: "%.3f", sample.position.z))]")
         }
 
         // Simulate device motion data from head movement (for compatibility)
@@ -190,7 +213,9 @@ final class SensorDataModel: ObservableObject {
         self.rotationRate = CMRotationRate(x: 0, y: 0, z: 0)
         self.gravity = CMAcceleration(x: 0, y: -1, z: 0) // Simulated gravity
 
-        self.queueHeadPoseUpload(position: position, eulerDegrees: euler, orientation: orientationD)
+        self.queueHeadPoseUpload(position: sample.position,
+                                 eulerDegrees: sample.eulerDegrees,
+                                 orientation: sample.orientation)
     }
 
     // MARK: - CoreMotion (iOS fallback)
@@ -391,7 +416,7 @@ final class SensorDataModel: ObservableObject {
         }
     }
 
-    static func eulerDegrees(from q: simd_quatd) -> SIMD3<Double> {
+    nonisolated static func eulerDegrees(from q: simd_quatd) -> SIMD3<Double> {
         let ysqr = q.imag.y * q.imag.y
 
         let t0 = 2.0 * (q.real * q.imag.x + q.imag.y * q.imag.z)

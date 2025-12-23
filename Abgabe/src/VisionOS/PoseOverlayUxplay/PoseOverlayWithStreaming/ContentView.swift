@@ -194,13 +194,9 @@ struct ContentView: View {
 
         if appModel.immersiveSpacePresented {
             await dismissImmersiveSpace()
-            await MainActor.run { appModel.setImmersiveSpacePresented(false) }
         } else {
             do {
-                let result = try await openImmersiveSpace(id: "PoseSpace")
-                if case .opened = result {
-                    await MainActor.run { appModel.setImmersiveSpacePresented(true) }
-                }
+                _ = try await openImmersiveSpace(id: "PoseSpace")
             } catch {
                 await MainActor.run { statusText = "Immersive space error: \(error.localizedDescription)" }
             }
