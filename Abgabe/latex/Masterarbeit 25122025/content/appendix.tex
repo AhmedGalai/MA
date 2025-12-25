@@ -1,0 +1,407 @@
+% ============================================================
+\appendix
+
+% ============================================================
+\section{Mathematical Formulation}
+\label{app:math_full}
+
+This appendix consolidates the mathematical formulation used in the system, covering camera intrinsics and distortion, ArUco-based registration, depth reprojection, and device-anchor tracking. The main chapters reference these results to keep the design and implementation sections focused on system-level decisions.
+
+\subsection{Coordinate Frames and Notation}
+The formulation uses the following coordinate frames: $RS_d$ (RealSense depth camera), $RS_c$ (RealSense color camera), $AVP$ (UxPlay/mirrored AVP camera), $D$ (ARKit device anchor), $M$ (ArUco marker/board), and $W$ (AVP world frame). Homogeneous transforms are written as
+\[
+\mathbf{T}_{A \leftarrow B} =
+\begin{bmatrix}
+\mathbf{R}_{AB} & \mathbf{t}_{AB} \\
+\mathbf{0}^\top & 1
+\end{bmatrix},
+\qquad
+\mathbf{X}_A = \mathbf{R}_{AB}\mathbf{X}_B + \mathbf{t}_{AB}.
+\]
+
+\subsection{Camera Intrinsics and Distortion}
+\label{app:intrinsics_distortion_full}
+For each camera, the pinhole intrinsics matrix is
+\[
+\mathbf{K} =
+\begin{bmatrix}
+f_x & 0 & c_x \\
+0 & f_y & c_y \\
+0 & 0 & 1
+\end{bmatrix}.
+\]
+Let $(X,Y,Z)$ be a point in camera coordinates and $(x,y)$ the normalized undistorted coordinates:
+\[
+x = \frac{X}{Z}, \quad y = \frac{Y}{Z}, \quad r^2 = x^2 + y^2.
+\]
+Using the Brown--Conrady model, radial distortion is
+\[
+x_r = x \left( 1 + k_1 r^2 + k_2 r^4 + k_3 r^6 \right),
+\qquad
+y_r = y \left( 1 + k_1 r^2 + k_2 r^4 + k_3 r^6 \right),
+\]
+and tangential distortion is
+\[
+x_d = x_r + 2 p_1 x y + p_2 (r^2 + 2 x^2),
+\qquad
+y_d = y_r + p_1 (r^2 + 2 y^2) + 2 p_2 x y.
+\]
+Pixel coordinates are
+\[
+u = f_x x_d + c_x, \quad v = f_y y_d + c_y.
+\]
+
+\subsection{ArUco Pose and Camera-to-Camera Transform}
+\label{app:aruco_transform_full}
+ArUco pose estimation yields the marker pose in the camera frame,
+\[
+\mathbf{T}_{C \leftarrow M} =
+\begin{bmatrix}
+\mathbf{R}_{CM} & \mathbf{t}_{CM} \\
+\mathbf{0}^\top & 1
+\end{bmatrix}.
+\]
+For RealSense and UxPlay, the corresponding poses are denoted $\mathbf{T}_{RS \leftarrow M}$ and $\mathbf{T}_{AVP \leftarrow M}$. The camera-to-camera transform used for reprojection is
+\[
+\mathbf{T}_{AVP \leftarrow RS} =
+\mathbf{T}_{AVP \leftarrow M}\left(\mathbf{T}_{RS \leftarrow M}\right)^{-1}.
+\]
+Using the block inverse,
+\[
+\left( \mathbf{T}_{RS \leftarrow M} \right)^{-1} =
+\begin{bmatrix}
+\mathbf{R}_{RSM}^\top & -\mathbf{R}_{RSM}^\top \mathbf{t}_{RSM} \\
+\mathbf{0}^\top & 1
+\end{bmatrix},
+\]
+the rotation and translation components follow as
+\[
+\mathbf{R}_{AVPRS} = \mathbf{R}_{AVPM} \mathbf{R}_{RSM}^\top,
+\quad
+\mathbf{t}_{AVPRS} = \mathbf{t}_{AVPM} - \mathbf{R}_{AVPM} \mathbf{R}_{RSM}^\top \mathbf{t}_{RSM}.
+\]
+
+\subsection{Depth Alignment and Reprojection}
+\label{app:depth_reprojection_full}
+Depth reprojection maps an aligned RealSense depth map into the UxPlay image plane. The RealSense SDK aligns depth from $RS_d$ into the color frame $RS_c$, yielding a depth image consistent with the color camera geometry. For a pixel $(u,v)$ with depth $z$ (meters), aligned depth is back-projected into 3D (after undistortion, if required) as
+\[
+\mathbf{X}_{RS} =
+z \, \mathbf{K}_{RS}^{-1}
+\begin{bmatrix}
+u \\ v \\ 1
+\end{bmatrix}.
+\]
+Points are transformed into the UxPlay camera frame using $\mathbf{T}_{AVP \leftarrow RS}$,
+\[
+\mathbf{X}_{AVP} =
+\mathbf{R}_{AVPRS} \mathbf{X}_{RS} + \mathbf{t}_{AVPRS},
+\]
+and then projected into the UxPlay image plane. Let $\mathbf{X}_{AVP} = [X_{AVP},Y_{AVP},Z_{AVP}]^\top$ and define normalized coordinates
+\[
+x = \frac{X_{AVP}}{Z_{AVP}},\qquad y = \frac{Y_{AVP}}{Z_{AVP}}.
+\]
+After applying the distortion model, pixel coordinates are obtained via $\mathbf{K}_{AVP}$,
+\[
+u_{AVP} = f_x^{AVP} x_d + c_x^{AVP}, \quad
+v_{AVP} = f_y^{AVP} y_d + c_y^{AVP},
+\]
+and the stored depth is $z_{AVP}=Z_{AVP}$. Since multiple points may map to the same pixel, the reprojected depth uses z-buffering:
+\[
+depth_{UxPlay}(v,u) = \min\{ z_{AVP} \mid (u_{AVP},v_{AVP})=(u,v),\ z_{AVP}>0 \}.
+\]
+Pixels without valid projected samples remain zero.
+
+\subsection{Device Anchor and Continuous Marker Tracking}
+\label{app:device_anchor_tracking_full}
+ARKit provides the device anchor transform $\mathbf{T}_{W \leftarrow D}$. A constant calibrated offset between the device anchor and the effective camera view is modeled as $\mathbf{T}_{D \leftarrow C}$, yielding
+\[
+\mathbf{T}_{W \leftarrow C} = \mathbf{T}_{W \leftarrow D}\mathbf{T}_{D \leftarrow C}.
+\]
+When the ArUco marker is visible in the UxPlay camera, the world-marker transform is
+\[
+\mathbf{T}_{W \leftarrow M} = \mathbf{T}_{W \leftarrow C}\mathbf{T}_{C \leftarrow M}.
+\]
+For brief occlusions, the device-to-marker transform
+\[
+\mathbf{T}_{D \leftarrow M} =
+\left(\mathbf{T}_{W \leftarrow D}\right)^{-1}\mathbf{T}_{W \leftarrow M}
+\]
+is cached at detection time, and the marker pose is propagated as
+\[
+\mathbf{T}_{W \leftarrow M} \approx \mathbf{T}_{W \leftarrow D}\mathbf{T}_{D \leftarrow M}.
+\]
+
+% ============================================================
+\section{System Architecture and Usage}
+\label{app:system_usage}
+
+The system is started by running the \texttt{visionOS} client from Xcode and launching the backend services on the Linux server. On the development machine, the \texttt{xcodeproj} for the \texttt{visionOS} application is opened in Xcode, the target device is selected in the run configuration, and the app is executed on the Apple Vision Pro. On the Kubuntu server, the backend stack is launched via
+\texttt{docker compose -f docker-compose.uxplay-api.yml up --build},
+which starts the CV service and the FoundationPose inference service. If the inference service is hosted on a different machine or IP address, the FoundationPose host configuration must be updated accordingly in \texttt{config.py} before launch.
+
+The following table summarizes the backend endpoints used by the visionOS client and by debugging utilities.
+
+\subsection{API Endpoints}
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.05}
+\small
+\begin{table}[H]
+\centering
+\caption[Backend endpoints]{Selected backend API endpoints used by the AVP client and debugging tools.}
+\label{tab:api_endpoints_app}
+\begin{tabular}{p{0.34\linewidth}p{0.12\linewidth}p{0.50\linewidth}}
+\toprule
+\textbf{Endpoint} & \textbf{Method} & \textbf{Description} \\
+\midrule
+\texttt{/health} & GET & Service status, calibration flags, ROI state. \\ \texttt{/models} & GET & List available PLY models. \\ \texttt{/select\_model} & POST & Select active mesh model. \\ \texttt{/avp\_roi\_config} & GET/POST & Configure normalized AVP ROI mask. \\ \texttt{/rs\_roi\_config} & GET/POST & Configure RealSense ROI mask (pixel coordinates). \\ \texttt{/aruco} & GET & UxPlay ArUco overlay and pose in the camera frame. \\ \texttt{/get\_rs\_aruco\_frame} & GET & RealSense ArUco overlay and pose. \\ \texttt{/get\_avp\_mask\_frame} & GET & AVP ROI mask visualization. \\ \texttt{/get\_transformed\_depth} & GET & RealSense depth reprojected into the UxPlay view. \\ \texttt{/get\_rs\_pose\_in\_avp} & GET & RealSense camera pose in the UxPlay camera frame. \\ \texttt{/get\_foundationpose\_pose} & GET & Latest FoundationPose output. \\ \texttt{/head\_pose} & POST & Stream head/device pose from visionOS. \\ \texttt{/debug} & GET & Web dashboard for intermediate outputs. \\ \texttt{/mjpeg} & GET & MJPEG stream with selectable diagnostic view. \\
+\bottomrule
+\end{tabular}
+\end{table}
+\normalsize
+
+
+% ============================================================
+\section{Occlusion Handling and Outlier/Null Pose Correction}
+\label{app:occlusion_and_masking}
+
+Several strategies were investigated for handling occlusion-induced failures and for smoothing pose trajectories during interactive debugging. Temporal filtering approaches included Kalman filtering, where the object pose is treated as a latent state updated by predict--update cycles, and Gaussian-process smoothing, where pose trajectories are modeled as samples from a temporally correlated stochastic process that can interpolate missing measurements while providing uncertainty estimates.
+
+During debugging, a conservative outlier/null correction rule was used to prevent catastrophic visualization jumps: poses failing basic validity checks (e.g., non-orthogonal rotations, $\det(\mathbf{R}) \not\approx 1$, or extreme translation jumps) were rejected and replaced by the previous valid pose, and the corresponding frame was marked as invalid in logs. These mechanisms were not enabled by default in evaluation mode to avoid masking upstream registration or reprojection errors.
+
+% ============================================================
+\section{Code Listings (Critical Modules)}
+\label{app:code_listings}
+
+This appendix provides representative excerpts for non-trivial components of the pipeline.
+
+\subsection{RealSense Alignment and Intrinsics Extraction}
+
+\begin{lstlisting}[style=code,language=Python,caption={RealSense alignment and intrinsics extraction (aligned depth to color).},label={lst:rs_align_backproject}]
+# realsense_client.py
+profile = self.pipeline.start(self.config)
+
+# Align depth to the color stream
+self.align_to = rs.stream.color
+self.align = rs.align(self.align_to)
+
+# Build intrinsics matrix from the color stream
+color_profile = profile.get_stream(rs.stream.color)
+intr = color_profile.as_video_stream_profile().get_intrinsics()
+self.intrinsics = np.array([
+    [intr.fx, 0, intr.ppx],
+    [0, intr.fy, intr.ppy],
+    [0, 0, 1],
+], dtype=np.float32)
+\end{lstlisting}
+
+\subsection{Camera-to-Camera Transform from Paired ArUco Detections}
+
+\begin{lstlisting}[style=code,language=Python,caption={Camera-to-camera transform from simultaneous ArUco detections.},label={lst:aruco_Tavprs}]
+# final_pipeline.py
+with avp_pose_lock:
+    T_avp_board = avp_pose_latest.get("pose_matrix")  # T_avp<-board
+with rs_aruco_lock:
+    T_rs_board = rs_aruco_latest.get("pose_matrix")   # T_rs<-board
+
+if T_avp_board is not None and T_rs_board is not None:
+    T_avp_rs = T_avp_board @ np.linalg.inv(T_rs_board)
+\end{lstlisting}
+
+\subsection{Depth Reprojection into UxPlay View (Distortion + Z-buffer)}
+
+\begin{lstlisting}[style=code,language=Python,caption={Reproject aligned RS depth into the AVP/UxPlay view with distortion and z-buffering.},label={lst:depth_to_avp}]
+# final_pipeline.py (simplified)
+pts = cv2.undistortPoints(uv_rs.reshape(-1, 1, 2), K_rs, dist_rs)
+X = pts[:, 0, 0] * z
+Y = pts[:, 0, 1] * z
+points_rs = np.stack([X, Y, z, np.ones_like(z)], axis=1)
+points_avp = (T_avp_rs @ points_rs.T).T
+
+img_pts, _ = cv2.projectPoints(
+    points_avp[:, :3], np.zeros(3), np.zeros(3), K_avp, dist_avp
+)
+u_avp = img_pts[:, 0, 0].astype(np.int32)
+v_avp = img_pts[:, 0, 1].astype(np.int32)
+
+depth_avp = np.zeros((h_avp, w_avp), dtype=np.float32)
+# z-buffering applied in implementation (keep nearest positive depth)
+depth_avp[v_avp, u_avp] = points_avp[:, 2]
+\end{lstlisting}
+
+\subsection{Normalized AVP ROI Mask}
+
+\begin{lstlisting}[style=code,language=Python,caption={Normalized circular ROI mask for the UxPlay view.},label={lst:avp_roi_mask}]
+# final_pipeline.py
+def _compute_avp_roi_mask(h: int, w: int) -> np.ndarray:
+    with avp_roi_lock:
+        cfg = AvpRoiConfig(**vars(avp_roi_cfg))
+
+    if not cfg.enabled:
+        return np.full((h, w), 255, dtype=np.uint8)
+
+    cx = int(cfg.cx_n * (w - 1))
+    cy = int(cfg.cy_n * (h - 1))
+    r_pix = int(cfg.r_n * float(min(w, h)))
+
+    mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.circle(mask, (cx, cy), max(1, r_pix), 255, -1)
+    return mask
+\end{lstlisting}
+
+\subsection{Pose API Payload Assembly (Base64 Encoding)}
+
+\begin{lstlisting}[style=code,language=Python,caption={Pose API payload assembly (base64 encoding of RGB, depth, mask, mesh).},label={lst:pose_api_payload}]
+# payload_builder.py (simplified)
+payload = {
+  "camera_matrix": K.tolist(),
+  "images": [{"filename": name, "rgb": b64_png(rgb), "depth": b64_png(depth)}],
+  "mask": b64_png(mask),
+  "mesh": b64_ply(mesh_bytes),
+}
+resp = requests.post(f"{POSE_API}/foundationpose", json=payload, timeout=TIMEOUT)
+\end{lstlisting}
+
+% ============================================================
+\section{AI Use in the Thesis}
+\label{sec:appendix-ai-use}
+
+This section documents how large language models (LLMs) and related AI tools were used during preparation of this thesis. AI outputs were treated as drafts and were reviewed, edited, and validated by the author, who remains responsible for the final content, technical claims, and implementation.
+
+\subsection{Summarization of Literature Documents}
+\label{appendix:ai-summarization}
+
+LLMs were used for first-pass, structured summaries of research papers and technical reports (AR interaction, \texttt{visionOS}, API design, $6$D pose estimation, depth estimation, and PbD). Summaries were used to accelerate triage and to extract implementation-relevant details; sources were then read and cross-checked manually.
+
+\textbf{Representative prompt.}
+\begin{verbatim}
+You are a university student specializing in computer vision. You are writing a thesis on visionOS-based AR with an external
+6D pose estimation backend.
+
+Summarize the following paper with a focus on:
+- problem setup and assumptions
+- inputs/outputs and core pipeline stages
+- data requirements (training/evaluation), computational needs (latency/FPS)
+- failure modes relevant to interactive AR/PbD use
+- what parts could be reused as a backend service module
+
+Return:
+1) a short narrative summary (8–12 sentences)
+2) 5–10 key implementation takeaways
+3) a 3–5 sentence integration note for my thesis prototype
+
+Text to summarize:
+<<<paste text here>>>
+\end{verbatim}
+
+\subsection{Code Drafting}
+\label{appendix:ai-codegen}
+
+LLMs were used to draft small code snippets and modules (Swift/SwiftUI for \texttt{visionOS}, API integration glue code, and Python prototyping utilities). Drafts were rewritten and tested before inclusion in the codebase.
+
+\textbf{Representative prompt.}
+\begin{verbatim}
+Act as a senior engineer experienced with visionOS, RealityKit, and
+REST APIs for AI services.
+
+Write a small, self-contained Swift file that:
+- defines a PoseEstimationService protocol with an async API
+- implements a default HTTP client that sends RGB + optional depth/mask
+  to a configurable endpoint
+- decodes a 4x4 SE(3) matrix response and exposes position + orientation
+- is testable and mockable
+
+Include:
+- the Swift code (single file)
+- a minimal usage example
+- TODOs for endpoint URL and authentication
+\end{verbatim}
+
+\subsection{Debugging Support}
+\label{appendix:ai-debugging}
+
+LLMs were used to interpret selected runtime logs and code excerpts from the \texttt{visionOS} client and Python backend, suggest debugging steps for synchronization and networking failures, and propose small refactorings around API boundaries and error handling. Proposed changes were validated against the running system.
+
+\textbf{Representative prompt.}
+\begin{verbatim}
+You are assisting with debugging a visionOS AR prototype that streams
+head pose to a Python backend and requests 6D object poses from a
+separate inference API.
+
+Given:
+- Swift code excerpts (AR session, networking, UI state)
+- Python backend excerpts (capture, reprojection, request assembly)
+- runtime logs / stack traces
+- intended behavior
+
+Please:
+1) identify likely root causes
+2) propose a step-by-step debugging plan (what to log/inspect)
+3) suggest minimal refactorings for robustness (timeouts, dropped frames)
+
+Client code:
+<<<paste Swift excerpts>>>
+
+Backend code:
+<<<paste Python excerpts>>>
+
+Logs:
+<<<paste logs>>>
+
+Intended behavior:
+<<<paste description>>>
+\end{verbatim}
+
+\subsection{Drafting of Supporting Documentation}
+\label{appendix:ai-docs}
+
+LLMs were used to draft supporting documentation for standard components (e.g., descriptions of \texttt{visionOS} APIs, REST request structures, configuration parameters, and module responsibilities). Drafts were edited to ensure they accurately reflected the implemented system and matched the surrounding thesis style.
+
+\textbf{Representative prompt.}
+\begin{verbatim}
+You are assisting with technical writing for a research thesis on
+visionOS-based AR and an external 6D pose estimation backend.
+
+Using the module description below, write neutral documentation that:
+- explains purpose and responsibilities
+- describes inputs/outputs and interaction with other modules
+- avoids novelty/marketing language
+- fits as a short subsection in a thesis
+
+Module description:
+<<<paste concise module description>>>
+
+Return:
+- 2–3 short paragraphs of description
+- a brief "Interface" paragraph (inputs/outputs)
+- a brief "Limitations" paragraph
+\end{verbatim}
+
+\subsection{Proofreading and Consistency Checking}
+\label{appendix:ai-proofreading}
+
+LLMs were used for proofreading and terminology consistency checks (e.g., ``$6$D pose estimation'', ``programming by demonstration (PbD)'', and \texttt{visionOS}), as well as for consistent naming of models and libraries. Final wording and all technical claims were decided by the author.
+
+\textbf{Representative prompt.}
+\begin{verbatim}
+You are proofreading a thesis section on visionOS-based AR and AI-assisted
+6D pose estimation for programming by demonstration (PbD).
+
+Task:
+- correct grammar and improve clarity without changing technical meaning
+- enforce consistent terminology (visionOS, PbD, 6D pose estimation)
+- flag undefined acronyms and ambiguous notation
+- do not introduce new claims or results
+- do not change LaTeX commands or labels
+
+Return:
+1) improved LaTeX text
+2) short list of notable edits
+3) list of terminology/notation issues found
+
+Text (LaTeX):
+<<<paste LaTeX section here>>>
+\end{verbatim}
+
+
+\textbf{Summary.}
+AI tools were used to accelerate literature triage, draft small code components, support debugging, draft supporting documentation, and assist proofreading. All outputs served as inputs to an author-led editing and validation process; responsibility for the final thesis content and implementation remains with the author.
