@@ -123,10 +123,6 @@ final class DebugDashboardModel: ObservableObject {
         async let avpRSOverlayTask = fetchAVPRSOverlay(baseURL: baseURL)
         async let avpMaskTask = fetchAVPMask(baseURL: baseURL)
         async let transformedDepthTask = fetchTransformedDepth(baseURL: baseURL)
-        async let fpAVPonAVPTask = fetchMJPEGFrame(baseURL: baseURL, view: "fp_avp_on_avp")
-        async let fpAVPonRSTask = fetchMJPEGFrame(baseURL: baseURL, view: "fp_avp_on_rs")
-        async let fpRSonAVPTask = fetchMJPEGFrame(baseURL: baseURL, view: "fp_rs_on_avp")
-        async let fpRSonRSTask = fetchMJPEGFrame(baseURL: baseURL, view: "fp_rs_on_rs")
         async let intrinsicsTask = fetchIntrinsics(baseURL: baseURL)
         async let transformTask = fetchTransforms(baseURL: baseURL)
         async let poseInAVPTask = fetchPoseInAVP(baseURL: baseURL)
@@ -152,11 +148,10 @@ final class DebugDashboardModel: ObservableObject {
         do { self.avpRSOverlayFrame = try await avpRSOverlayTask } catch { errors.append(error.localizedDescription) }
         do { self.avpMaskFrame = try await avpMaskTask } catch { errors.append(error.localizedDescription) }
         do { self.transformedDepthFrame = try await transformedDepthTask } catch { errors.append(error.localizedDescription) }
-        do { self.fpAVPonAVPFrame = try await fpAVPonAVPTask } catch { errors.append(error.localizedDescription) }
-        do { self.fpAVPonRSFrame = try await fpAVPonRSTask } catch { errors.append(error.localizedDescription) }
-        do { self.fpRSonAVPFrame = try await fpRSonAVPTask } catch { errors.append(error.localizedDescription) }
-        do { self.fpRSonRSFrame = try await fpRSonRSTask } catch { errors.append(error.localizedDescription) }
         do { self.intrinsics = try await intrinsicsTask } catch { errors.append(error.localizedDescription) }
+
+        // Only fetch the currently selected FP view (on-demand)
+        await fetchSelectedFPViewIfNeeded()
         do { self.transforms = try await transformTask } catch { errors.append(error.localizedDescription) }
         do { self.poseInAVP = try await poseInAVPTask } catch { errors.append(error.localizedDescription) }
         do {
@@ -401,46 +396,88 @@ private extension DebugDashboardModel {
                           timestamp: ts)
     }
 
+    func fetchSelectedFPViewIfNeeded() async {
+        guard baseURL != nil else { return }
+
+        // Only fetch if an FP view is selected
+        let fpViews = ["fp_avp_on_avp", "fp_avp_on_rs", "fp_rs_on_avp", "fp_rs_on_rs"]
+        guard fpViews.contains(selectedView) else { return }
+
+        // Fetch only the selected view
+        do {
+            let frame = try await fetchMJPEGFrame(baseURL: baseURL!, view: selectedView)
+            switch selectedView {
+            case "fp_avp_on_avp": self.fpAVPonAVPFrame = frame
+            case "fp_avp_on_rs": self.fpAVPonRSFrame = frame
+            case "fp_rs_on_avp": self.fpRSonAVPFrame = frame
+            case "fp_rs_on_rs": self.fpRSonRSFrame = frame
+            default: break
+            }
+        } catch {
+            // Silently fail - user can manually refresh if needed
+        }
+    }
+
     func fetchMJPEGFrame(baseURL: URL, view: String) async throws -> FrameState {
-        var comps = URLComponents(url: baseURL.appendingPathComponent("mjpeg"), resolvingAgainstBaseURL: false)!
-        comps.queryItems = [URLQueryItem(name: "view", value: view)]
+        return try await withThrowingTaskGroup(of: FrameState.self) { group in
+            group.addTask {
+                var comps = URLComponents(url: baseURL.appendingPathComponent("mjpeg"), resolvingAgainstBaseURL: false)!
+                comps.queryItems = [URLQueryItem(name: "view", value: view)]
 
-        // MJPEG stream returns multipart data, we need to extract first frame
-        let (asyncBytes, response) = try await URLSession.shared.bytes(from: comps.url!)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw DashboardError.badHTTPStatus((response as? HTTPURLResponse)?.statusCode ?? -1, "Failed to fetch MJPEG")
-        }
+                // MJPEG stream returns multipart data, we need to extract first frame
+                let (asyncBytes, response) = try await URLSession.shared.bytes(from: comps.url!)
+                guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                    throw DashboardError.badHTTPStatus((response as? HTTPURLResponse)?.statusCode ?? -1, "Failed to fetch MJPEG")
+                }
 
-        // Read MJPEG stream until we find the first complete JPEG frame
-        var buffer = Data()
-        let maxBytes = 5_000_000 // 5MB max to prevent runaway
+                // Read MJPEG stream with improved efficiency
+                var buffer = Data()
+                let maxBytes = 2_000_000 // 2MB max (reduced from 5MB)
+                var lastCheckSize = 0
 
-        for try await byte in asyncBytes {
-            buffer.append(byte)
+                for try await byte in asyncBytes {
+                    buffer.append(byte)
 
-            // Look for JPEG start (FF D8) and end (FF D9) markers
-            if buffer.count > maxBytes {
-                throw DashboardError.badHTTPStatus(-1, "MJPEG frame too large")
+                    // Check size limit
+                    if buffer.count > maxBytes {
+                        throw DashboardError.badHTTPStatus(-1, "MJPEG frame too large")
+                    }
+
+                    // Only check for JPEG markers every 1KB to reduce overhead
+                    if buffer.count - lastCheckSize >= 1024 {
+                        lastCheckSize = buffer.count
+
+                        // Check if we have a complete JPEG
+                        if let jpegStart = buffer.range(of: Data([0xFF, 0xD8])),
+                           let jpegEnd = buffer.range(of: Data([0xFF, 0xD9]), in: jpegStart.upperBound..<buffer.endIndex) {
+                            // Extract the JPEG data
+                            let jpegData = buffer[jpegStart.lowerBound...jpegEnd.upperBound]
+                            let image = await Task.detached(priority: .utility) {
+                                UIImage(data: jpegData)
+                            }.value
+
+                            return FrameState(image: image,
+                                            subtitle: view,
+                                            details: "Fetched from MJPEG stream",
+                                            timestamp: Date())
+                        }
+                    }
+                }
+
+                throw DashboardError.badHTTPStatus(-1, "No complete JPEG frame found")
             }
 
-            // Check if we have a complete JPEG
-            if let jpegStart = buffer.range(of: Data([0xFF, 0xD8])),
-               let jpegEnd = buffer.range(of: Data([0xFF, 0xD9]), in: jpegStart.upperBound..<buffer.endIndex) {
-                // Extract the JPEG data
-                let jpegData = buffer[jpegStart.lowerBound...jpegEnd.upperBound]
-                let image = await Task.detached(priority: .utility) {
-                    UIImage(data: jpegData)
-                }.value
-
-                return FrameState(image: image,
-                                 subtitle: view,
-                                 details: "Fetched from MJPEG stream",
-                                 timestamp: Date())
+            // Add timeout task
+            group.addTask {
+                try await Task.sleep(for: .seconds(3))
+                throw DashboardError.badHTTPStatus(-1, "MJPEG fetch timeout")
             }
-        }
 
-        // If we get here, we didn't find a complete JPEG frame
-        throw DashboardError.badHTTPStatus(-1, "No complete JPEG frame found")
+            // Return first result (either frame or timeout)
+            let result = try await group.next()!
+            group.cancelAll()
+            return result
+        }
     }
 
     func performRequest(baseURL: URL, path: String) async throws -> Data {
