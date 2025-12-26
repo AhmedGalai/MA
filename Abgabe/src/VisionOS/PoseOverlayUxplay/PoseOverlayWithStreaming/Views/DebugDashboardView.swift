@@ -422,7 +422,10 @@ private extension DebugDashboardModel {
         return try await withThrowingTaskGroup(of: FrameState.self) { group in
             group.addTask {
                 var comps = URLComponents(url: baseURL.appendingPathComponent("mjpeg"), resolvingAgainstBaseURL: false)!
-                comps.queryItems = [URLQueryItem(name: "view", value: view)]
+                comps.queryItems = [
+                    URLQueryItem(name: "view", value: view),
+                    URLQueryItem(name: "_ts", value: String(Date().timeIntervalSince1970))
+                ]
 
                 // MJPEG stream returns multipart data, we need to extract first frame
                 let (asyncBytes, response) = try await URLSession.shared.bytes(from: comps.url!)
@@ -432,7 +435,7 @@ private extension DebugDashboardModel {
 
                 // Read MJPEG stream with improved efficiency
                 var buffer = Data()
-                let maxBytes = 2_000_000 // 2MB max (reduced from 5MB)
+                let maxBytes = 8_000_000 // Allow larger JPEGs from high-res UxPlay feeds.
                 var lastCheckSize = 0
 
                 for try await byte in asyncBytes {

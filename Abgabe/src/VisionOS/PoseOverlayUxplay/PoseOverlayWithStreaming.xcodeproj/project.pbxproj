@@ -63,7 +63,7 @@
 		AA000000000000000000201B /* ArucoStreamModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArucoStreamModel.swift; sourceTree = "<group>"; };
 		AA0000000000000000002020 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		AA0000000000000000002021 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		AA0000000000000000002022 /* PoseOverlayWithStreaming.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PoseOverlayWithStreaming.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA0000000000000000002022 /* PoseOverlayUxplay.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PoseOverlayUxplay.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000000000000000002023 /* CalibrationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibrationManager.swift; sourceTree = "<group>"; };
 		AA0000000000000000002024 /* RealSensePoseModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealSensePoseModel.swift; sourceTree = "<group>"; };
 		AA0000000000000000002025 /* AnchorSetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnchorSetupView.swift; sourceTree = "<group>"; };
@@ -96,7 +96,7 @@
 		AA0000000000000000000300 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				AA0000000000000000002022 /* PoseOverlayWithStreaming.app */,
+				AA0000000000000000002022 /* PoseOverlayUxplay.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -196,7 +196,7 @@
 			);
 			name = PoseOverlayWithStreaming;
 			productName = PoseOverlayWithStreaming;
-			productReference = AA0000000000000000002022 /* PoseOverlayWithStreaming.app */;
+			productReference = AA0000000000000000002022 /* PoseOverlayUxplay.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
