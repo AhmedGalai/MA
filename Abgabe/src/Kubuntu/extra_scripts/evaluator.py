@@ -21,8 +21,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import glob
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, Tuple, List
 from pathlib import Path
@@ -65,6 +63,28 @@ class FPPair:
                 self.rs_request.latency_ms is not None)
 
 
+def load_pose_matrix(metadata: Dict[str, Any], pose_path: Optional[Path]) -> Optional[np.ndarray]:
+    """Load pose matrix from metadata or a .npy file."""
+    pose_matrix = None
+    if "pose_matrix" in metadata and metadata["pose_matrix"] is not None:
+        try:
+            pose_matrix = np.array(metadata["pose_matrix"], dtype=np.float64)
+            if pose_matrix.shape != (4, 4):
+                pose_matrix = None
+        except Exception:
+            pose_matrix = None
+
+    if pose_matrix is None and pose_path is not None and pose_path.exists():
+        try:
+            pose_matrix = np.load(pose_path)
+            if pose_matrix.shape != (4, 4):
+                pose_matrix = None
+        except Exception:
+            pose_matrix = None
+
+    return pose_matrix
+
+
 def load_request(directory: Path) -> Optional[FPRequest]:
     """Load a single FP request from a directory"""
     metadata_path = directory / "metadata.json"
@@ -83,15 +103,8 @@ def load_request(directory: Path) -> Optional[FPRequest]:
     source = metadata.get("source", "unknown")
     timestamp = metadata.get("timestamp", directory.name)
 
-    # Load pose matrix
-    pose_matrix = None
-    if "pose_matrix" in metadata and metadata["pose_matrix"] is not None:
-        try:
-            pose_matrix = np.array(metadata["pose_matrix"], dtype=np.float64)
-            if pose_matrix.shape != (4, 4):
-                pose_matrix = None
-        except:
-            pose_matrix = None
+    pose_path = directory / "pose.npy"
+    pose_matrix = load_pose_matrix(metadata, pose_path)
 
     # Extract latency
     latency_ms = None
@@ -126,6 +139,66 @@ def load_request(directory: Path) -> Optional[FPRequest]:
     )
 
 
+def load_flat_request(metadata_path: Path) -> Optional[FPRequest]:
+    """Load a single FP request from flat files in a directory."""
+    if not metadata_path.exists():
+        return None
+
+    try:
+        with open(metadata_path) as f:
+            metadata = json.load(f)
+    except Exception as e:
+        print(f"Error loading {metadata_path}: {e}")
+        return None
+
+    base_name = metadata_path.name
+    if not base_name.endswith("_meta.json"):
+        return None
+    prefix = base_name[:-len("_meta.json")]
+
+    capture_id = metadata.get("capture_id")
+    if not capture_id:
+        capture_id = prefix
+        if capture_id.startswith("fp_"):
+            capture_id = capture_id[len("fp_"):]
+
+    source = metadata.get("source", "unknown")
+    timestamp = metadata.get("timestamp", capture_id)
+
+    rgb_path = metadata_path.with_name(f"{prefix}_rgb.png")
+    if not rgb_path.exists():
+        rgb_path = metadata_path.with_name(f"{prefix}_rgb.jpg")
+
+    depth_path = metadata_path.with_name(f"{prefix}_depth.png")
+    if not depth_path.exists():
+        depth_path = None
+
+    mask_path = metadata_path.with_name(f"{prefix}_mask.png")
+    if not mask_path.exists():
+        mask_path = None
+
+    pose_path = metadata_path.with_name(f"{prefix}_pose.npy")
+    pose_matrix = load_pose_matrix(metadata, pose_path)
+
+    latency_ms = None
+    if "latency" in metadata and isinstance(metadata["latency"], dict):
+        latency_ms = metadata["latency"].get("foundationpose_api_ms")
+
+    return FPRequest(
+        capture_id=capture_id,
+        source=source,
+        timestamp=timestamp,
+        directory=metadata_path.parent,
+        rgb_path=rgb_path,
+        depth_path=depth_path,
+        mask_path=mask_path,
+        metadata_path=metadata_path,
+        metadata=metadata,
+        pose_matrix=pose_matrix,
+        latency_ms=latency_ms
+    )
+
+
 def load_all_requests(fp_dir: Path) -> List[FPRequest]:
     """Load all FP requests from directory"""
     requests = []
@@ -137,6 +210,12 @@ def load_all_requests(fp_dir: Path) -> List[FPRequest]:
         request = load_request(subdir)
         if request:
             requests.append(request)
+
+    if not requests:
+        for metadata_path in sorted(fp_dir.glob("*_meta.json")):
+            request = load_flat_request(metadata_path)
+            if request:
+                requests.append(request)
 
     print(f"Loaded {len(requests)} requests from {fp_dir}")
     return requests
