@@ -57,6 +57,10 @@ final class DebugDashboardModel: ObservableObject {
     @Published var avpRSOverlayFrame = FrameState()
     @Published var avpMaskFrame = FrameState()
     @Published var transformedDepthFrame = FrameState()
+    @Published var fpAVPonAVPFrame = FrameState()
+    @Published var fpAVPonRSFrame = FrameState()
+    @Published var fpRSonAVPFrame = FrameState()
+    @Published var fpRSonRSFrame = FrameState()
     @Published var intrinsics = IntrinsicsState()
     @Published var transforms = TransformState()
     @Published var poseInAVP = PoseInAVPState()
@@ -119,6 +123,10 @@ final class DebugDashboardModel: ObservableObject {
         async let avpRSOverlayTask = fetchAVPRSOverlay(baseURL: baseURL)
         async let avpMaskTask = fetchAVPMask(baseURL: baseURL)
         async let transformedDepthTask = fetchTransformedDepth(baseURL: baseURL)
+        async let fpAVPonAVPTask = fetchMJPEGFrame(baseURL: baseURL, view: "fp_avp_on_avp")
+        async let fpAVPonRSTask = fetchMJPEGFrame(baseURL: baseURL, view: "fp_avp_on_rs")
+        async let fpRSonAVPTask = fetchMJPEGFrame(baseURL: baseURL, view: "fp_rs_on_avp")
+        async let fpRSonRSTask = fetchMJPEGFrame(baseURL: baseURL, view: "fp_rs_on_rs")
         async let intrinsicsTask = fetchIntrinsics(baseURL: baseURL)
         async let transformTask = fetchTransforms(baseURL: baseURL)
         async let poseInAVPTask = fetchPoseInAVP(baseURL: baseURL)
@@ -144,6 +152,10 @@ final class DebugDashboardModel: ObservableObject {
         do { self.avpRSOverlayFrame = try await avpRSOverlayTask } catch { errors.append(error.localizedDescription) }
         do { self.avpMaskFrame = try await avpMaskTask } catch { errors.append(error.localizedDescription) }
         do { self.transformedDepthFrame = try await transformedDepthTask } catch { errors.append(error.localizedDescription) }
+        do { self.fpAVPonAVPFrame = try await fpAVPonAVPTask } catch { errors.append(error.localizedDescription) }
+        do { self.fpAVPonRSFrame = try await fpAVPonRSTask } catch { errors.append(error.localizedDescription) }
+        do { self.fpRSonAVPFrame = try await fpRSonAVPTask } catch { errors.append(error.localizedDescription) }
+        do { self.fpRSonRSFrame = try await fpRSonRSTask } catch { errors.append(error.localizedDescription) }
         do { self.intrinsics = try await intrinsicsTask } catch { errors.append(error.localizedDescription) }
         do { self.transforms = try await transformTask } catch { errors.append(error.localizedDescription) }
         do { self.poseInAVP = try await poseInAVPTask } catch { errors.append(error.localizedDescription) }
@@ -387,6 +399,48 @@ private extension DebugDashboardModel {
                           subtitle: subtitle,
                           details: details,
                           timestamp: ts)
+    }
+
+    func fetchMJPEGFrame(baseURL: URL, view: String) async throws -> FrameState {
+        var comps = URLComponents(url: baseURL.appendingPathComponent("mjpeg"), resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "view", value: view)]
+
+        // MJPEG stream returns multipart data, we need to extract first frame
+        let (asyncBytes, response) = try await URLSession.shared.bytes(from: comps.url!)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw DashboardError.badHTTPStatus((response as? HTTPURLResponse)?.statusCode ?? -1, "Failed to fetch MJPEG")
+        }
+
+        // Read MJPEG stream until we find the first complete JPEG frame
+        var buffer = Data()
+        let maxBytes = 5_000_000 // 5MB max to prevent runaway
+
+        for try await byte in asyncBytes {
+            buffer.append(byte)
+
+            // Look for JPEG start (FF D8) and end (FF D9) markers
+            if buffer.count > maxBytes {
+                throw DashboardError.badHTTPStatus(-1, "MJPEG frame too large")
+            }
+
+            // Check if we have a complete JPEG
+            if let jpegStart = buffer.range(of: Data([0xFF, 0xD8])),
+               let jpegEnd = buffer.range(of: Data([0xFF, 0xD9]), in: jpegStart.upperBound..<buffer.endIndex) {
+                // Extract the JPEG data
+                let jpegData = buffer[jpegStart.lowerBound...jpegEnd.upperBound]
+                let image = await Task.detached(priority: .utility) {
+                    UIImage(data: jpegData)
+                }.value
+
+                return FrameState(image: image,
+                                 subtitle: view,
+                                 details: "Fetched from MJPEG stream",
+                                 timestamp: Date())
+            }
+        }
+
+        // If we get here, we didn't find a complete JPEG frame
+        throw DashboardError.badHTTPStatus(-1, "No complete JPEG frame found")
     }
 
     func performRequest(baseURL: URL, path: String) async throws -> Data {
@@ -674,13 +728,13 @@ struct DebugDashboardView: View {
         case "avp_depth":
             return ("RS Depth → AVP", model.transformedDepthFrame)
         case "fp_avp_on_avp":
-            return ("FP (AVP request) → AVP view", DebugDashboardModel.FrameState(subtitle: "Not available in dashboard"))
+            return ("FP (AVP request) → AVP view", model.fpAVPonAVPFrame)
         case "fp_avp_on_rs":
-            return ("FP (AVP request) → RS view", DebugDashboardModel.FrameState(subtitle: "Not available in dashboard"))
+            return ("FP (AVP request) → RS view", model.fpAVPonRSFrame)
         case "fp_rs_on_avp":
-            return ("FP (RS request) → AVP view", DebugDashboardModel.FrameState(subtitle: "Not available in dashboard"))
+            return ("FP (RS request) → AVP view", model.fpRSonAVPFrame)
         case "fp_rs_on_rs":
-            return ("FP (RS request) → RS view", DebugDashboardModel.FrameState(subtitle: "Not available in dashboard"))
+            return ("FP (RS request) → RS view", model.fpRSonRSFrame)
         default:
             return (viewLabel(for: model.selectedView), DebugDashboardModel.FrameState(subtitle: "No data"))
         }

@@ -56,7 +56,119 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
-logger = logging.getLogger("basic_main_api_with_uxplay")
+logger = logging.getLogger("basic_main_api_with_uxplay_latency")
+
+# ============================================================================
+# LATENCY MEASUREMENT INFRASTRUCTURE
+# ============================================================================
+from functools import wraps
+from collections import defaultdict
+import statistics
+
+# Global latency tracking
+latency_stats_lock = threading.Lock()
+latency_stats = defaultdict(lambda: {
+    "count": 0,
+    "total_time": 0.0,
+    "min_time": float('inf'),
+    "max_time": 0.0,
+    "recent_times": [],  # Last 100 measurements
+    "last_latency": None,
+})
+
+# Per-request latency tracking (for saving with data)
+current_request_latency = threading.local()
+
+def measure_latency(f):
+    """Decorator to measure endpoint latency and track statistics."""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        endpoint_name = f.__name__
+        start_time = time.perf_counter()
+
+        try:
+            result = f(*args, **kwargs)
+            return result
+        finally:
+            end_time = time.perf_counter()
+            latency = (end_time - start_time) * 1000  # Convert to milliseconds
+
+            # Store in thread-local storage for access in save functions
+            current_request_latency.value = latency
+            current_request_latency.endpoint = endpoint_name
+            current_request_latency.timestamp = time.time()
+
+            # Update global statistics
+            with latency_stats_lock:
+                stats = latency_stats[endpoint_name]
+                stats["count"] += 1
+                stats["total_time"] += latency
+                stats["min_time"] = min(stats["min_time"], latency)
+                stats["max_time"] = max(stats["max_time"], latency)
+                stats["last_latency"] = latency
+
+                # Keep last 100 measurements for calculating percentiles
+                stats["recent_times"].append(latency)
+                if len(stats["recent_times"]) > 100:
+                    stats["recent_times"].pop(0)
+
+                # Log slow requests (> 1 second)
+                if latency > 1000:
+                    logger.warning(f"Slow request: {endpoint_name} took {latency:.2f}ms")
+
+    return wrapper
+
+def get_latency_stats(endpoint_name=None):
+    """Get latency statistics for a specific endpoint or all endpoints."""
+    with latency_stats_lock:
+        if endpoint_name:
+            stats = latency_stats.get(endpoint_name, {})
+            if stats and stats.get("count", 0) > 0:
+                recent = stats["recent_times"]
+                return {
+                    "endpoint": endpoint_name,
+                    "count": stats["count"],
+                    "avg_ms": stats["total_time"] / stats["count"],
+                    "min_ms": stats["min_time"],
+                    "max_ms": stats["max_time"],
+                    "last_ms": stats["last_latency"],
+                    "p50_ms": statistics.median(recent) if recent else None,
+                    "p95_ms": statistics.quantiles(recent, n=20)[18] if len(recent) >= 20 else None,
+                    "p99_ms": statistics.quantiles(recent, n=100)[98] if len(recent) >= 100 else None,
+                }
+            return None
+        else:
+            # Return all stats
+            result = {}
+            for name, stats in latency_stats.items():
+                if stats.get("count", 0) > 0:
+                    recent = stats["recent_times"]
+                    result[name] = {
+                        "count": stats["count"],
+                        "avg_ms": stats["total_time"] / stats["count"],
+                        "min_ms": stats["min_time"],
+                        "max_ms": stats["max_time"],
+                        "last_ms": stats["last_latency"],
+                        "p50_ms": statistics.median(recent) if recent else None,
+                        "p95_ms": statistics.quantiles(recent, n=20)[18] if len(recent) >= 20 else None,
+                        "p99_ms": statistics.quantiles(recent, n=100)[98] if len(recent) >= 100 else None,
+                    }
+            return result
+
+def get_current_request_latency():
+    """Get the latency of the current request for inclusion in metadata."""
+    try:
+        return {
+            "latency_ms": getattr(current_request_latency, 'value', None),
+            "endpoint": getattr(current_request_latency, 'endpoint', None),
+            "request_timestamp": getattr(current_request_latency, 'timestamp', None),
+        }
+    except:
+        return None
+
+# ============================================================================
+# END LATENCY MEASUREMENT INFRASTRUCTURE
+# ============================================================================
 
 # -----------------------------
 # Model selection (VisionOS UI)
@@ -123,50 +235,6 @@ foundationpose_save_pair = {
     "need_rs": False,
     "armed_time": None,
 }
-
-# ============================================================================
-# FoundationPose Alternation: Ensure AVP and RS workers alternate properly
-# ============================================================================
-foundationpose_alternator_lock = threading.Lock()
-foundationpose_alternator_cv = threading.Condition(foundationpose_alternator_lock)
-foundationpose_current_turn = "avp"  # Which worker can run next: "avp" or "rs"
-foundationpose_request_in_progress = False  # Is a request currently being processed?
-
-def _fp_wait_for_turn(worker_name: str, timeout: float = 5.0) -> bool:
-    """
-    Wait until it's this worker's turn and no request is in progress.
-
-    Args:
-        worker_name: "avp" or "rs"
-        timeout: Max time to wait in seconds
-
-    Returns:
-        True if got the turn, False if timeout
-    """
-    global foundationpose_current_turn, foundationpose_request_in_progress
-    with foundationpose_alternator_cv:
-        start_time = time.time()
-        while (foundationpose_current_turn != worker_name or
-               foundationpose_request_in_progress):
-            remaining = timeout - (time.time() - start_time)
-            if remaining <= 0:
-                return False
-            foundationpose_alternator_cv.wait(timeout=remaining)
-        # Got the turn!
-        foundationpose_request_in_progress = True
-        return True
-
-def _fp_release_turn():
-    """Release the turn and switch to the other worker."""
-    global foundationpose_current_turn, foundationpose_request_in_progress
-    with foundationpose_alternator_cv:
-        foundationpose_request_in_progress = False
-        # Switch turn
-        foundationpose_current_turn = "rs" if foundationpose_current_turn == "avp" else "avp"
-        # Notify waiting worker
-        foundationpose_alternator_cv.notify_all()
-
-# ============================================================================
 
 def _rs_depth_alignment_ok(latest: Dict[str, Any]) -> Tuple[bool, str]:
     rgb = latest.get("rgb")
@@ -1196,170 +1264,179 @@ def _start_foundationpose_worker(capture: UxPlayCapture, processor: "ArucoProces
     - RGB comes from UxPlay AVP frame
     - Depth comes from RS aligned depth projected into AVP using T_avp<-rs and AVP intrinsics
     - Mask comes from normalized AVP ROI (no HSV)
-
-    ALTERNATION: Waits for turn, sends request, waits for response, releases turn.
     """
     def loop():
         frame_index = 0
         while True:
-            # Wait for our turn (timeout after 5 seconds to check for shutdown)
-            if not _fp_wait_for_turn("avp", timeout=5.0):
-                # Timeout - check conditions and retry
-                time.sleep(0.1)
+            frame, ts = capture.get_latest()
+            if frame is None:
+                with foundationpose_lock:
+                    foundationpose_latest.update(
+                        {"pose_matrix": None, "timestamp": None, "message": "No AVP frame yet", "success": False}
+                    )
+                time.sleep(0.2)
                 continue
 
-            # We have the turn and request_in_progress is set
-            # Use try-finally to ALWAYS release the turn
-            try:
-                frame, ts = capture.get_latest()
-                if frame is None:
-                    with foundationpose_lock:
-                        foundationpose_latest.update(
-                            {"pose_matrix": None, "timestamp": None, "message": "No AVP frame yet", "success": False}
-                        )
-                    time.sleep(0.2)
-                    continue
+            frame_index += 1
+            stride = _get_processing_stride()
+            if stride > 1 and (frame_index % stride) != 0:
+                time.sleep(0.2)
+                continue
 
-                frame_index += 1
-                stride = _get_processing_stride()
-                if stride > 1 and (frame_index % stride) != 0:
-                    time.sleep(0.2)
-                    continue
-
-                if rs_capture is None:
-                    with foundationpose_lock:
-                        foundationpose_latest.update(
-                            {"pose_matrix": None, "timestamp": None, "message": "RealSense not connected", "success": False}
-                        )
-                    time.sleep(0.5)
-                    continue
-
-                latest = rs_capture.get_latest()
-                depth_rs = latest.get("depth")
-                K_rs = latest.get("K")
-                dist_rs = latest.get("dist")
-                aligned_ok = latest.get("aligned_ok")
-                if depth_rs is None or K_rs is None:
-                    with foundationpose_lock:
-                        foundationpose_latest.update(
-                            {"pose_matrix": None, "timestamp": ts, "message": "No RealSense depth yet", "success": False}
-                        )
-                    time.sleep(0.2)
-                    continue
-
-                T_avp_rs = _get_T_avp_rs()
-                if T_avp_rs is None:
-                    with foundationpose_lock:
-                        foundationpose_latest.update(
-                            {"pose_matrix": None, "timestamp": ts, "message": "Missing RS->AVP calibration", "success": False}
-                        )
-                    time.sleep(0.5)
-                    continue
-
-                try:
-                    depth_avp = _transform_depth_rs_to_avp(
-                        depth_rs,
-                        K_rs,
-                        dist_rs,
-                        T_avp_rs,
-                        processor.K,
-                        processor.dist,
-                        (capture.height, capture.width),
+            if rs_capture is None:
+                with foundationpose_lock:
+                    foundationpose_latest.update(
+                        {"pose_matrix": None, "timestamp": None, "message": "RealSense not connected", "success": False}
                     )
-                except Exception as e:
-                    with foundationpose_lock:
-                        foundationpose_latest.update(
-                            {"pose_matrix": None, "timestamp": ts, "message": f"Depth transform failed: {e}", "success": False}
-                        )
-                    time.sleep(0.5)
-                    continue
+                time.sleep(0.5)
+                continue
 
-                # AVP ROI mask (normalized circle)
-                mask = _compute_avp_roi_mask(capture.height, capture.width)
+            latest = rs_capture.get_latest()
+            depth_rs = latest.get("depth")
+            K_rs = latest.get("K")
+            dist_rs = latest.get("dist")
+            aligned_ok = latest.get("aligned_ok")
+            if depth_rs is None or K_rs is None:
+                with foundationpose_lock:
+                    foundationpose_latest.update(
+                        {"pose_matrix": None, "timestamp": ts, "message": "No RealSense depth yet", "success": False}
+                    )
+                time.sleep(0.2)
+                continue
 
-                model_name = _get_selected_model()
-                mesh_path = model_name
-                if not os.path.isabs(mesh_path):
-                    mesh_path = os.path.join(CONFIG["paths"]["models_dir"], mesh_path)
-                if not os.path.exists(mesh_path):
-                    with foundationpose_lock:
-                        foundationpose_latest.update(
-                            {"pose_matrix": None, "timestamp": ts, "message": f"Missing mesh: {model_name}", "success": False}
-                        )
-                    time.sleep(1.0)
-                    continue
+            T_avp_rs = _get_T_avp_rs()
+            if T_avp_rs is None:
+                with foundationpose_lock:
+                    foundationpose_latest.update(
+                        {"pose_matrix": None, "timestamp": ts, "message": "Missing RS->AVP calibration", "success": False}
+                    )
+                time.sleep(0.5)
+                continue
 
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            try:
+                depth_avp = _transform_depth_rs_to_avp(
+                    depth_rs,
+                    K_rs,
+                    dist_rs,
+                    T_avp_rs,
+                    processor.K,
+                    processor.dist,
+                    (capture.height, capture.width),
+                )
+            except Exception as e:
+                with foundationpose_lock:
+                    foundationpose_latest.update(
+                        {"pose_matrix": None, "timestamp": ts, "message": f"Depth transform failed: {e}", "success": False}
+                    )
+                time.sleep(0.5)
+                continue
 
-                # Call FoundationPose API (blocking - waits for response)
-                pose = estimate_pose(
+            # AVP ROI mask (normalized circle)
+            mask = _compute_avp_roi_mask(capture.height, capture.width)
+
+            model_name = _get_selected_model()
+            mesh_path = model_name
+            if not os.path.isabs(mesh_path):
+                mesh_path = os.path.join(CONFIG["paths"]["models_dir"], mesh_path)
+            if not os.path.exists(mesh_path):
+                with foundationpose_lock:
+                    foundationpose_latest.update(
+                        {"pose_matrix": None, "timestamp": ts, "message": f"Missing mesh: {model_name}", "success": False}
+                    )
+                time.sleep(1.0)
+                continue
+
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+            # Measure FoundationPose API latency
+            fp_start = time.perf_counter()
+            pose = estimate_pose(
+                rgb=rgb,
+                depth=depth_avp,
+                mask=mask,
+                K=processor.K,
+                mesh_path=mesh_path,
+                api_url=CONFIG["network"]["foundationpose_url"],
+            )
+            fp_latency_ms = (time.perf_counter() - fp_start) * 1000
+
+            # if _consume_save_next_foundationpose():
+            #     _save_foundationpose_request(
+            #         rgb=rgb,
+            #         depth=depth_avp,
+            #         mask=mask,
+            #         pose=pose,
+            #         meta={
+            #             "timestamp": ts,
+            #             "model": model_name,
+            #             "foundationpose_url": CONFIG["network"]["foundationpose_url"],
+            #             "rs_depth_aligned_to_color": bool(aligned_ok),
+            #             "T_avp_rs": None if T_avp_rs is None else T_avp_rs.tolist(),
+            #             "avp_roi": vars(avp_roi_cfg),
+            #         },
+            #     )
+
+            capture_id = _consume_save_avp()
+            if capture_id is not None:
+                # include both directions
+                T_rs_avp = None
+                try:
+                    T_rs_avp = np.linalg.inv(T_avp_rs).astype(np.float32).tolist()
+                except Exception:
+                    pass
+
+                with avp_pose_lock:
+                    T_avp_board = avp_pose_latest.get("pose_matrix")
+                with rs_aruco_lock:
+                    T_rs_board = rs_aruco_latest.get("pose_matrix")
+
+                _save_foundationpose_request(
                     rgb=rgb,
                     depth=depth_avp,
                     mask=mask,
-                    K=processor.K,
-                    mesh_path=mesh_path,
-                    api_url=CONFIG["network"]["foundationpose_url"],
+                    pose=pose,
+                    meta={
+                        "capture_id": capture_id,
+                        "source": "avp",
+                        "timestamp": ts,
+                        "model": model_name,
+                        "foundationpose_url": CONFIG["network"]["foundationpose_url"],
+
+                        "rs_depth_aligned_to_color": bool(aligned_ok),
+
+                        # key transforms for later evaluation
+                        "T_avp_rs": T_avp_rs.astype(np.float32).tolist() if T_avp_rs is not None else None,
+                        "T_rs_avp": T_rs_avp,
+
+                        # optional but very useful debugging context
+                        "T_avp_board": None if T_avp_board is None else T_avp_board.astype(np.float32).tolist(),
+                        "T_rs_board": None if T_rs_board is None else T_rs_board.astype(np.float32).tolist(),
+
+                        "avp_roi": vars(avp_roi_cfg),
+
+                        # END-TO-END LATENCY MEASUREMENTS
+                        "latency": {
+                            "foundationpose_api_ms": fp_latency_ms,
+                            "worker_loop_timestamp": time.time(),
+                        },
+                    },
                 )
 
-                # Save if requested
-                capture_id = _consume_save_avp()
-                if capture_id is not None:
-                    # include both directions
-                    T_rs_avp = None
-                    try:
-                        T_rs_avp = np.linalg.inv(T_avp_rs).astype(np.float32).tolist()
-                    except Exception:
-                        pass
 
-                    with avp_pose_lock:
-                        T_avp_board = avp_pose_latest.get("pose_matrix")
-                    with rs_aruco_lock:
-                        T_rs_board = rs_aruco_latest.get("pose_matrix")
-
-                    _save_foundationpose_request(
-                        rgb=rgb,
-                        depth=depth_avp,
-                        mask=mask,
-                        pose=pose,
-                        meta={
-                            "capture_id": capture_id,
-                            "source": "avp",
-                            "timestamp": ts,
-                            "model": model_name,
-                            "foundationpose_url": CONFIG["network"]["foundationpose_url"],
-
-                            "rs_depth_aligned_to_color": bool(aligned_ok),
-
-                            # key transforms for later evaluation
-                            "T_avp_rs": T_avp_rs.astype(np.float32).tolist() if T_avp_rs is not None else None,
-                            "T_rs_avp": T_rs_avp,
-
-                            # optional but very useful debugging context
-                            "T_avp_board": None if T_avp_board is None else T_avp_board.astype(np.float32).tolist(),
-                            "T_rs_board": None if T_rs_board is None else T_rs_board.astype(np.float32).tolist(),
-
-                            "avp_roi": vars(avp_roi_cfg),
-                        },
+            if pose is None:
+                with foundationpose_lock:
+                    foundationpose_latest.update(
+                        {"pose_matrix": None, "timestamp": ts, "message": "FoundationPose returned no pose", "success": False}
                     )
+                time.sleep(1.0)
+                continue
 
-                # Update result (after FoundationPose response received)
-                if pose is None:
-                    with foundationpose_lock:
-                        foundationpose_latest.update(
-                            {"pose_matrix": None, "timestamp": ts, "message": "FoundationPose returned no pose", "success": False}
-                        )
-                else:
-                    with foundationpose_lock:
-                        foundationpose_latest.update(
-                            {"pose_matrix": pose, "timestamp": ts, "message": "ok", "success": True}
-                        )
+            with foundationpose_lock:
+                foundationpose_latest.update(
+                    {"pose_matrix": pose, "timestamp": ts, "message": "ok", "success": True}
+                )
 
-                # Small delay before next iteration
-                time.sleep(0.5)
-
-            finally:
-                # CRITICAL: Always release the turn so the other worker can run
-                _fp_release_turn()
+            time.sleep(0.8)
 
     t = threading.Thread(target=loop, daemon=True)
     t.start()
@@ -1367,142 +1444,146 @@ def _start_foundationpose_worker(capture: UxPlayCapture, processor: "ArucoProces
 
 
 def _start_foundationpose_rs_worker() -> threading.Thread:
-    """
-    FoundationPose in RS camera coordinates.
-
-    ALTERNATION: Waits for turn, sends request, waits for response, releases turn.
-    """
     def loop():
         frame_index = 0
         while True:
-            # Wait for our turn (timeout after 5 seconds to check for shutdown)
-            if not _fp_wait_for_turn("rs", timeout=5.0):
-                # Timeout - check conditions and retry
-                time.sleep(0.1)
+            if rs_capture is None:
+                with foundationpose_rs_lock:
+                    foundationpose_rs_latest.update(
+                        {"pose_matrix": None, "timestamp": None, "message": "RealSense not connected", "success": False}
+                    )
+                time.sleep(0.5)
                 continue
 
-            # We have the turn and request_in_progress is set
-            # Use try-finally to ALWAYS release the turn
-            try:
-                if rs_capture is None:
-                    with foundationpose_rs_lock:
-                        foundationpose_rs_latest.update(
-                            {"pose_matrix": None, "timestamp": None, "message": "RealSense not connected", "success": False}
-                        )
-                    time.sleep(0.5)
-                    continue
+            latest = rs_capture.get_latest()
+            rgb_bgr = latest.get("rgb")
+            depth = latest.get("depth")
+            K = latest.get("K")
+            ts = latest.get("timestamp") or time.time()
+            if rgb_bgr is None or depth is None or K is None:
+                with foundationpose_rs_lock:
+                    foundationpose_rs_latest.update(
+                        {"pose_matrix": None, "timestamp": ts, "message": "Missing RS frame", "success": False}
+                    )
+                time.sleep(0.2)
+                continue
 
-                latest = rs_capture.get_latest()
-                rgb_bgr = latest.get("rgb")
-                depth = latest.get("depth")
-                K = latest.get("K")
-                ts = latest.get("timestamp") or time.time()
-                if rgb_bgr is None or depth is None or K is None:
-                    with foundationpose_rs_lock:
-                        foundationpose_rs_latest.update(
-                            {"pose_matrix": None, "timestamp": ts, "message": "Missing RS frame", "success": False}
-                        )
-                    time.sleep(0.2)
-                    continue
+            frame_index += 1
+            stride = _get_processing_stride()
+            if stride > 1 and (frame_index % stride) != 0:
+                time.sleep(0.2)
+                continue
 
-                frame_index += 1
-                stride = _get_processing_stride()
-                if stride > 1 and (frame_index % stride) != 0:
-                    time.sleep(0.2)
-                    continue
+            with rs_roi_lock:
+                cx = int(rs_roi_config["x_center"])
+                cy = int(rs_roi_config["y_center"])
+                radius = int(rs_roi_config["radius"])
 
-                with rs_roi_lock:
-                    cx = int(rs_roi_config["x_center"])
-                    cy = int(rs_roi_config["y_center"])
-                    radius = int(rs_roi_config["radius"])
+            mask = np.zeros(rgb_bgr.shape[:2], dtype=np.uint8)
+            cv2.circle(mask, (cx, cy), radius, 255, -1)
 
-                mask = np.zeros(rgb_bgr.shape[:2], dtype=np.uint8)
-                cv2.circle(mask, (cx, cy), radius, 255, -1)
+            model_name = _get_selected_model()
+            mesh_path = model_name
+            if not os.path.isabs(mesh_path):
+                mesh_path = os.path.join(CONFIG["paths"]["models_dir"], mesh_path)
+            if not os.path.exists(mesh_path):
+                with foundationpose_rs_lock:
+                    foundationpose_rs_latest.update(
+                        {"pose_matrix": None, "timestamp": ts, "message": f"Missing mesh: {model_name}", "success": False}
+                    )
+                time.sleep(1.0)
+                continue
 
-                model_name = _get_selected_model()
-                mesh_path = model_name
-                if not os.path.isabs(mesh_path):
-                    mesh_path = os.path.join(CONFIG["paths"]["models_dir"], mesh_path)
-                if not os.path.exists(mesh_path):
-                    with foundationpose_rs_lock:
-                        foundationpose_rs_latest.update(
-                            {"pose_matrix": None, "timestamp": ts, "message": f"Missing mesh: {model_name}", "success": False}
-                        )
-                    time.sleep(1.0)
-                    continue
+            rgb = cv2.cvtColor(rgb_bgr, cv2.COLOR_BGR2RGB)
 
-                rgb = cv2.cvtColor(rgb_bgr, cv2.COLOR_BGR2RGB)
+            # Measure FoundationPose API latency (RS)
+            fp_rs_start = time.perf_counter()
+            pose = estimate_pose(
+                rgb=rgb,
+                depth=depth,
+                mask=mask,
+                K=K,
+                mesh_path=mesh_path,
+                api_url=CONFIG["network"]["foundationpose_url"],
+            )
+            fp_rs_latency_ms = (time.perf_counter() - fp_rs_start) * 1000
 
-                # Call FoundationPose API (blocking - waits for response)
-                pose = estimate_pose(
+            # if _consume_save_next_foundationpose():
+            #     _save_foundationpose_rs_request(
+            #         rgb=rgb,
+            #         depth=depth,
+            #         mask=mask,
+            #         pose=pose,
+            #         meta={
+            #             "timestamp": ts,
+            #             "model": model_name,
+            #             "foundationpose_url": CONFIG["network"]["foundationpose_url"],
+            #             "roi": {"x_center": cx, "y_center": cy, "radius": radius},
+            #         },
+            #     )
+
+            capture_id = _consume_save_rs()
+            if capture_id is not None:
+                # grab transform at save time (best effort)
+                T_avp_rs_now = _get_T_avp_rs()
+                T_rs_avp = None
+                try:
+                    if T_avp_rs_now is not None:
+                        T_rs_avp = np.linalg.inv(T_avp_rs_now).astype(np.float32).tolist()
+                except Exception:
+                    pass
+
+                with avp_pose_lock:
+                    T_avp_board = avp_pose_latest.get("pose_matrix")
+                with rs_aruco_lock:
+                    T_rs_board = rs_aruco_latest.get("pose_matrix")
+
+                _save_foundationpose_rs_request(
                     rgb=rgb,
                     depth=depth,
                     mask=mask,
-                    K=K,
-                    mesh_path=mesh_path,
-                    api_url=CONFIG["network"]["foundationpose_url"],
+                    pose=pose,
+                    meta={
+                        "capture_id": capture_id,
+                        "source": "rs",
+                        "timestamp": ts,
+                        "model": model_name,
+                        "foundationpose_url": CONFIG["network"]["foundationpose_url"],
+
+                        # key transforms for later evaluation
+                        "T_avp_rs": None if T_avp_rs_now is None else T_avp_rs_now.astype(np.float32).tolist(),
+                        "T_rs_avp": T_rs_avp,
+
+                        # optional debug
+                        "T_avp_board": None if T_avp_board is None else T_avp_board.astype(np.float32).tolist(),
+                        "T_rs_board": None if T_rs_board is None else T_rs_board.astype(np.float32).tolist(),
+
+                        "roi": {"x_center": cx, "y_center": cy, "radius": radius},
+
+                        # END-TO-END LATENCY MEASUREMENTS
+                        "latency": {
+                            "foundationpose_api_ms": fp_rs_latency_ms,
+                            "worker_loop_timestamp": time.time(),
+                        },
+                    },
                 )
 
-                # Save if requested
-                capture_id = _consume_save_rs()
-                if capture_id is not None:
-                    # grab transform at save time (best effort)
-                    T_avp_rs_now = _get_T_avp_rs()
-                    T_rs_avp = None
-                    try:
-                        if T_avp_rs_now is not None:
-                            T_rs_avp = np.linalg.inv(T_avp_rs_now).astype(np.float32).tolist()
-                    except Exception:
-                        pass
 
-                    with avp_pose_lock:
-                        T_avp_board = avp_pose_latest.get("pose_matrix")
-                    with rs_aruco_lock:
-                        T_rs_board = rs_aruco_latest.get("pose_matrix")
-
-                    _save_foundationpose_rs_request(
-                        rgb=rgb,
-                        depth=depth,
-                        mask=mask,
-                        pose=pose,
-                        meta={
-                            "capture_id": capture_id,
-                            "source": "rs",
-                            "timestamp": ts,
-                            "model": model_name,
-                            "foundationpose_url": CONFIG["network"]["foundationpose_url"],
-
-                            # key transforms for later evaluation
-                            "T_avp_rs": None if T_avp_rs_now is None else T_avp_rs_now.astype(np.float32).tolist(),
-                            "T_rs_avp": T_rs_avp,
-
-                            # optional debug
-                            "T_avp_board": None if T_avp_board is None else T_avp_board.astype(np.float32).tolist(),
-                            "T_rs_board": None if T_rs_board is None else T_rs_board.astype(np.float32).tolist(),
-
-                            "roi": {"x_center": cx, "y_center": cy, "radius": radius},
-                        },
+            if pose is None:
+                with foundationpose_rs_lock:
+                    foundationpose_rs_latest.update(
+                        {"pose_matrix": None, "timestamp": ts, "message": "FoundationPose returned no pose", "success": False}
                     )
+                logger.warning("FoundationPose RS returned no pose")
+                time.sleep(1.0)
+                continue
 
-                # Update result (after FoundationPose response received)
-                if pose is None:
-                    with foundationpose_rs_lock:
-                        foundationpose_rs_latest.update(
-                            {"pose_matrix": None, "timestamp": ts, "message": "FoundationPose returned no pose", "success": False}
-                        )
-                    logger.warning("FoundationPose RS returned no pose")
-                else:
-                    with foundationpose_rs_lock:
-                        foundationpose_rs_latest.update(
-                            {"pose_matrix": pose, "timestamp": ts, "message": "ok", "success": True}
-                        )
+            with foundationpose_rs_lock:
+                foundationpose_rs_latest.update(
+                    {"pose_matrix": pose, "timestamp": ts, "message": "ok", "success": True}
+                )
 
-                # Small delay before next iteration
-                time.sleep(0.5)
-
-            finally:
-                # CRITICAL: Always release the turn so the other worker can run
-                _fp_release_turn()
+            time.sleep(0.8)
 
     t = threading.Thread(target=loop, daemon=True)
     t.start()
@@ -1720,6 +1801,7 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
         ), 200
 
     @app.route("/get_rgbd_frame", methods=["GET"])
+    @measure_latency
     def get_rgbd_frame():
         if rs_capture is None:
             return jsonify({"error": "RealSense not connected"}), 503
@@ -1864,6 +1946,7 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
         ), 200
 
     @app.route("/get_transformed_depth", methods=["GET"])
+    @measure_latency
     def get_transformed_depth():
         if rs_capture is None:
             return jsonify({"error": "RealSense not connected"}), 503
@@ -1993,6 +2076,7 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
         ), 200
 
     @app.route("/get_foundationpose_pose", methods=["GET"])
+    @measure_latency
     def get_foundationpose_pose():
         with foundationpose_lock:
             pose = foundationpose_latest.get("pose_matrix")
@@ -2009,6 +2093,7 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
         ), 200
 
     @app.route("/get_foundationpose_rs_pose", methods=["GET"])
+    @measure_latency
     def get_foundationpose_rs_pose():
         with foundationpose_rs_lock:
             pose = foundationpose_rs_latest.get("pose_matrix")
@@ -2025,6 +2110,7 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
         ), 200
 
     @app.route("/head_pose", methods=["POST"])
+    @measure_latency
     def head_pose():
         data = request.get_json(force=True, silent=True) or {}
         position = data.get("position")
@@ -2103,6 +2189,52 @@ def create_app(capture: UxPlayCapture, processor: ArucoProcessor) -> Flask:
             if "r_n" in data:
                 avp_roi_cfg.r_n = _clamp_float(data["r_n"], 0.0, 1.0)
         return jsonify({"deprecated": True, "avp_roi": vars(avp_roi_cfg)}), 200
+
+    @app.route("/latency_stats", methods=["GET"])
+    def latency_stats():
+        """
+        Get end-to-end latency statistics for all measured endpoints.
+
+        Query parameters:
+            endpoint (optional): Get stats for a specific endpoint
+            reset (optional): Reset all statistics if set to 'true'
+
+        Returns:
+            JSON with latency statistics including:
+            - count: Total number of requests
+            - avg_ms: Average latency in milliseconds
+            - min_ms: Minimum latency
+            - max_ms: Maximum latency
+            - last_ms: Most recent request latency
+            - p50_ms: 50th percentile (median)
+            - p95_ms: 95th percentile
+            - p99_ms: 99th percentile
+        """
+        reset = request.args.get('reset', '').lower() == 'true'
+        endpoint = request.args.get('endpoint')
+
+        if reset:
+            with latency_stats_lock:
+                latency_stats.clear()
+            return jsonify({
+                "status": "reset",
+                "message": "All latency statistics have been reset"
+            }), 200
+
+        if endpoint:
+            stats = get_latency_stats(endpoint)
+            if stats is None:
+                return jsonify({
+                    "error": f"No statistics found for endpoint: {endpoint}"
+                }), 404
+            return jsonify(stats), 200
+        else:
+            all_stats = get_latency_stats()
+            return jsonify({
+                "endpoints": all_stats,
+                "total_endpoints": len(all_stats),
+                "timestamp": time.time(),
+            }), 200
 
     @app.route("/debug", methods=["GET"])
     def debug_page():
@@ -2376,13 +2508,9 @@ wire();
                     if out is None:
                         time.sleep(0.02)
                         continue
-                    # Try to get ArUco overlay, fallback to raw frame if not available
-                    aruco_data = processor.get_aruco().get("rgb")
-                    if aruco_data is not None:
-                        annotated = _decode_jpeg_b64(aruco_data)
-                        if annotated is not None:
-                            out = annotated
-                    # else: keep using `out` (the raw frame)
+                    annotated = _decode_jpeg_b64(processor.get_aruco().get("rgb"))
+                    if annotated is not None:
+                        out = annotated
                     with avp_pose_lock:
                         avp_pose = avp_pose_latest.get("pose_matrix")
                     if avp_pose is not None:
@@ -2431,13 +2559,9 @@ wire();
                     if out is None:
                         time.sleep(0.02)
                         continue
-                    # Try to get ArUco overlay, fallback to raw frame if not available
-                    aruco_data = processor.get_aruco().get("rgb")
-                    if aruco_data is not None:
-                        annotated = _decode_jpeg_b64(aruco_data)
-                        if annotated is not None:
-                            out = annotated
-                    # else: keep using `out` (the raw frame)
+                    annotated = _decode_jpeg_b64(processor.get_aruco().get("rgb"))
+                    if annotated is not None:
+                        out = annotated
                     with foundationpose_lock:
                         fp_pose = foundationpose_latest.get("pose_matrix")
                     if fp_pose is not None:
@@ -2453,13 +2577,9 @@ wire();
                     if out is None:
                         time.sleep(0.02)
                         continue
-                    # Try to get ArUco overlay, fallback to raw frame if not available
-                    aruco_data = processor.get_aruco().get("rgb")
-                    if aruco_data is not None:
-                        annotated = _decode_jpeg_b64(aruco_data)
-                        if annotated is not None:
-                            out = annotated
-                    # else: keep using `out` (the raw frame)
+                    annotated = _decode_jpeg_b64(processor.get_aruco().get("rgb"))
+                    if annotated is not None:
+                        out = annotated
                     # Need to transform RS pose to AVP frame
                     with foundationpose_rs_lock:
                         fp_rs_pose = foundationpose_rs_latest.get("pose_matrix")

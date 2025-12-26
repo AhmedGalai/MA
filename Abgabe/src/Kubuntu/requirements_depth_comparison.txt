@@ -1,0 +1,16 @@
+# Requirements for depth comparison program
+
+# Core dependencies
+opencv-python>=4.8.0
+numpy>=1.24.0
+pyrealsense2>=2.54.0
+
+# HuggingFace transformers
+transformers>=4.30.0
+torch>=2.0.0
+torchvision>=0.15.0
+Pillow>=9.5.0
+
+# Optional: for GPU acceleration
+# Install PyTorch with CUDA support from:
+# https://pytorch.org/get-started/locally/
