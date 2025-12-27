@@ -670,12 +670,3 @@ private enum TextMeshCache {
         )
     }
 }
-
-extension simd_float4x4 {
-    init(translation: SIMD3<Float>) {
-        self = matrix_identity_float4x4
-        columns.3.x = translation.x
-        columns.3.y = translation.y
-        columns.3.z = translation.z
-    }
-}

@@ -100,11 +100,8 @@ final class ArucoStreamModel: ObservableObject {
     }
     
     private func applyCalibration() {
-        guard let latest = latestBoardTransform, let calibration = calibrationManager.calibrationTransform else {
-            calibratedBoardTransform = latestBoardTransform
-            return
-        }
-        calibratedBoardTransform = latest * calibration
+        // Keep the ArUco pose in camera space; calibration is applied later in world conversion.
+        calibratedBoardTransform = latestBoardTransform
     }
 
     nonisolated private static func decodeImage(_ dataURL: String) -> UIImage? {

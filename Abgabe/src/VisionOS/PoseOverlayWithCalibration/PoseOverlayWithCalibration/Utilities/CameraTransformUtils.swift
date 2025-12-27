@@ -163,20 +163,12 @@ enum CameraTransformUtils {
 
     /// Provides the deviceFromCamera transform (camera-to-device offset).
     /// Reads from CalibrationManager if a calibrated value is available,
-    /// otherwise returns a default estimated offset.
+    /// otherwise returns identity (no hardcoded offset).
     static var currentCameraOffset: simd_float4x4 {
         if let calibratedTransform = _calibrationManager?.calibrationTransformSnapshot {
             return calibratedTransform
         }
-
-        // Default estimated physical offset of AVP main camera from DeviceAnchor origin
-        // Coordinate system: x=right, y=down, z=forward (device coordinate system)
-        let defaultOffset = SIMD3<Float>(
-            0.0,    // x: no lateral offset
-            -0.01,  // y: ~1cm down
-            0.04    // z: ~4cm forward
-        )
-        return simd_float4x4(translation: defaultOffset)
+        return matrix_identity_float4x4
     }
 
     /// Compute worldFromCamera transform from device anchor
