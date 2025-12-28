@@ -16,6 +16,7 @@ struct AnchorSetupView: View {
 
             translationSliders
             rotationSliders
+            trackingSliders
 
             Spacer()
 
@@ -45,6 +46,15 @@ struct AnchorSetupView: View {
                 slider(label: "X-axis (Pitch)", value: $calibrationModel.xRotation, range: -180...180)
                 slider(label: "Y-axis (Yaw)", value: $calibrationModel.yRotation, range: -180...180)
                 slider(label: "Z-axis (Roll)", value: $calibrationModel.zRotation, range: -180...180)
+            }
+            .padding(.top, 8)
+        }
+    }
+
+    private var trackingSliders: some View {
+        GroupBox("Tracking") {
+            VStack {
+                slider(label: "ArUco smoothing", value: $calibrationModel.arucoSmoothingAlpha, range: 0.0...0.5)
             }
             .padding(.top, 8)
         }

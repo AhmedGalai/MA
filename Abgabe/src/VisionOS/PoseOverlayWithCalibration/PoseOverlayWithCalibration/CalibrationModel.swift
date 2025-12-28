@@ -10,6 +10,7 @@ class CalibrationModel: ObservableObject {
     @Published var xRotation: Float = 0.0
     @Published var yRotation: Float = 0.0
     @Published var zRotation: Float = 0.0
+    @Published var arucoSmoothingAlpha: Float = 0.12
 
     var transform: simd_float4x4 {
         let translation = simd_float4x4(translation: SIMD3<Float>(xTranslation, yTranslation, zTranslation))

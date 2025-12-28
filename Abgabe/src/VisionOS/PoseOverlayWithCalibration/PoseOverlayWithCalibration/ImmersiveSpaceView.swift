@@ -361,6 +361,7 @@ struct ImmersiveSpaceView: View {
     @State private var foundationAxes: Entity?
     @State private var gizmo: Entity?
     @State private var labelsAdded = false
+    @State private var smoothedArucoTransform: simd_float4x4?
 
     var body: some View {
         RealityView { content in
@@ -466,6 +467,7 @@ struct ImmersiveSpaceView: View {
         guard let boardAxes else { return }
         guard let deviceTransform = sensorModel.latestDeviceTransform else {
             boardAxes.isEnabled = false
+            smoothedArucoTransform = nil
             return
         }
 
@@ -474,33 +476,63 @@ struct ImmersiveSpaceView: View {
                 cameraPose: cameraFromAruco,
                 deviceTransform: deviceTransform
             )
+            let filtered = smoothTransform(
+                previous: smoothedArucoTransform,
+                target: worldFromAruco,
+                alpha: calibrationModel.arucoSmoothingAlpha
+            )
+            smoothedArucoTransform = filtered
 
             boardAxes.isEnabled = true
-            boardAxes.transform = Transform(matrix: worldFromAruco)
+            boardAxes.transform = Transform(matrix: filtered)
         } else {
             boardAxes.isEnabled = false
+            smoothedArucoTransform = nil
         }
     }
 
     private func updateRSPose() {
         guard let rsAxes else { return }
-        if let matrix = rsPoseModel.rsPoseMatrix {
-            rsAxes.isEnabled = true
-            rsAxes.transform = Transform(matrix: matrix)
-        } else {
+        guard let deviceTransform = sensorModel.latestDeviceTransform,
+              let cameraFromRS = rsPoseModel.rsPoseMatrix else {
             rsAxes.isEnabled = false
+            return
         }
+
+        let worldFromCamera = CameraTransformUtils.cameraToWorldTransform(from: deviceTransform)
+        let worldFromRS = worldFromCamera * cameraFromRS
+        rsAxes.isEnabled = true
+        rsAxes.transform = Transform(matrix: worldFromRS)
     }
 
     private func updateFoundationPose() {
         guard let foundationAxes else { return }
-        if let matrix = foundationPoseModel.poseMatrix {
-            foundationAxes.isEnabled = true
-            foundationAxes.transform = Transform(matrix: matrix)
-        } else {
+        guard let deviceTransform = sensorModel.latestDeviceTransform,
+              let cameraFromObject = foundationPoseModel.poseMatrix else {
             foundationAxes.isEnabled = true
             foundationAxes.transform = Transform()
+            return
         }
+
+        let worldFromCamera = CameraTransformUtils.cameraToWorldTransform(from: deviceTransform)
+        let worldFromObject = worldFromCamera * cameraFromObject
+        foundationAxes.isEnabled = true
+        foundationAxes.transform = Transform(matrix: worldFromObject)
+    }
+
+    private func smoothTransform(previous: simd_float4x4?, target: simd_float4x4, alpha: Float) -> simd_float4x4 {
+        guard let previous else { return target }
+        let prevRot = simd_quatf(previous)
+        let targetRot = simd_quatf(target)
+        let rot = simd_slerp(prevRot, targetRot, alpha)
+
+        let prevPos = SIMD3<Float>(previous.columns.3.x, previous.columns.3.y, previous.columns.3.z)
+        let targetPos = SIMD3<Float>(target.columns.3.x, target.columns.3.y, target.columns.3.z)
+        let pos = prevPos + (targetPos - prevPos) * alpha
+
+        var result = simd_float4x4(rot)
+        result.columns.3 = SIMD4<Float>(pos.x, pos.y, pos.z, 1.0)
+        return result
     }
 
     private func makeAxesEntity(length: Float) -> Entity {
@@ -668,14 +700,5 @@ private enum TextMeshCache {
             alignment: .center,
             lineBreakMode: .byWordWrapping
         )
-    }
-}
-
-extension simd_float4x4 {
-    init(translation: SIMD3<Float>) {
-        self = matrix_identity_float4x4
-        columns.3.x = translation.x
-        columns.3.y = translation.y
-        columns.3.z = translation.z
     }
 }
