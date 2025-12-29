@@ -16,5 +16,7 @@ flask-cors>=4.0.0
 requests>=2.31.0
 rich>=13.5.0
 
-# Optional: For debugging GUI
-# Pillow>=10.0.0
+# MDE transformer depth
+transformers>=4.35.0
+torch>=2.0.0
+Pillow>=10.0.0

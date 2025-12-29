@@ -27,7 +27,6 @@ services:
       - UXPLAY_HEIGHT=1080
       - API_HOST=0.0.0.0
       - API_PORT=8000
-      - HF_HOME=/app/.cache/huggingface
       - PROCESS_FPS=15.0
       - ARUCO_DICT=DICT_4X4_250
       - ARUCO_ROWS=3
@@ -47,4 +46,3 @@ services:
       - ./models:/app/models:ro
       - ./intrinsics.json:/app/intrinsics.json:ro
       - ./extrinsics:/app/extrinsics:ro
-      - ./hf_cache:/app/.cache/huggingface
