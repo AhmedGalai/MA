@@ -1,0 +1,11 @@
+[
+  {
+    "capture_id": "20251229_144102_62630",
+    "translation_error_m": 1.8896874694147447,
+    "rotation_error_deg": 169.95445237540716,
+    "avp_latency_ms": 505.1290680130478,
+    "rs_latency_ms": 961.8489340064116,
+    "has_pose_error": true,
+    "has_latency": true
+  }
+]

@@ -59,7 +59,8 @@ if [[ -n "${UXPLAY_BINARY}" ]]; then
 fi
 
 #exec python3 /app/final_pipeline.py "${ARGS[@]}"
-exec python3 /app/final_pipeline_with_latency_mde.py "${ARGS[@]}"
+#exec python3 /app/final_pipeline_with_latency_mde.py "${ARGS[@]}"
+exec python3 /app/final_pipeline_with_latency.py "${ARGS[@]}"
 #exec python3 /app/basic_main_api_with_uxplay_rs.py "${ARGS[@]}"
 #exec python3 /app/avp_foundationpose_pipeline.py "${ARGS[@]}"
 #exec python3 /app/rs_foundationpose_pipeline.py "${ARGS[@]}"
