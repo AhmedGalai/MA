@@ -527,6 +527,7 @@ struct ImmersiveSpaceView: View {
             return
         }
         guard let cameraFromObject = foundationPoseModel.poseMatrix else {
+            foundationAxesAVP.isEnabled = false
             return
         }
 
@@ -544,6 +545,7 @@ struct ImmersiveSpaceView: View {
         }
         guard let cameraFromRS = rsPoseModel.rsPoseMatrix,
               let rsCameraFromObject = foundationPoseModel.rsPoseMatrix else {
+            foundationAxesRS.isEnabled = false
             return
         }
 
